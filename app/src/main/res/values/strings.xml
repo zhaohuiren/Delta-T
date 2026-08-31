@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Delta T</string>
+    <string name="notification_channel_name">通勤计时</string>
+    <string name="notification_channel_description">锁屏时持续显示 Delta T 的定位与计时状态</string>
+</resources>

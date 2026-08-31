@@ -1,0 +1,39 @@
+flowchart TB
+  subgraph UI[Compose UI]
+    Screens[首页/设置/计时/历史]
+    VM[ViewModels]
+  end
+  subgraph App[Application]
+    UC[Use Cases]
+  end
+  subgraph Domain[Pure Kotlin Domain]
+    Engine[Timing Engine]
+    Detector[Checkpoint Detector]
+    Quality[Location Quality]
+    Judge[Record Judge]
+    Geometry[Geometry & Track]
+  end
+  subgraph Platform[Android Platform]
+    FGS[Location Foreground Service]
+    LM[LocationManager + GNSS]
+    Notify[Persistent Notification]
+    Map[AMap Editor Adapter]
+  end
+  subgraph Data[Local Data]
+    Repo[Repositories]
+    Room[(Room DB)]
+    Store[(DataStore)]
+  end
+  Screens --> VM --> UC --> Engine
+  FGS --> Engine
+  LM --> FGS
+  Engine --> Detector
+  Detector --> Geometry
+  Engine --> Quality
+  Engine --> Judge
+  Engine --> Repo --> Room
+  UC --> Repo
+  FGS --> Notify
+  Map --> UC
+  VM --> Store
+

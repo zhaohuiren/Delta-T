@@ -1,0 +1,1252 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 4,
+    "identityHash": "541fe5530952622cee5bb0debefb1cc9",
+    "entities": [
+      {
+        "tableName": "route_profiles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `directionType` TEXT NOT NULL, `activeCheckpointVersionId` TEXT, `referenceSessionId` TEXT, `createdAtMillis` INTEGER NOT NULL, `updatedAtMillis` INTEGER NOT NULL, `archived` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "directionType",
+            "columnName": "directionType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activeCheckpointVersionId",
+            "columnName": "activeCheckpointVersionId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "referenceSessionId",
+            "columnName": "referenceSessionId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "createdAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updatedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "archived",
+            "columnName": "archived",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "checkpoint_versions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `routeProfileId` TEXT NOT NULL, `versionNumber` INTEGER NOT NULL, `createdFromSessionId` TEXT, `createdAtMillis` INTEGER NOT NULL, `active` INTEGER NOT NULL, `changeReason` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "routeProfileId",
+            "columnName": "routeProfileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "versionNumber",
+            "columnName": "versionNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdFromSessionId",
+            "columnName": "createdFromSessionId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "createdAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "active",
+            "columnName": "active",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "changeReason",
+            "columnName": "changeReason",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_checkpoint_versions_routeProfileId",
+            "unique": false,
+            "columnNames": [
+              "routeProfileId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_checkpoint_versions_routeProfileId` ON `${TABLE_NAME}` (`routeProfileId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "checkpoints",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `checkpointVersionId` TEXT NOT NULL, `orderIndex` INTEGER NOT NULL, `label` TEXT NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `radiusMeters` REAL NOT NULL, `preferredBearing` REAL, `bearingTolerance` REAL NOT NULL, `gateHalfWidthMeters` REAL NOT NULL, `sourceTrackPointId` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checkpointVersionId",
+            "columnName": "checkpointVersionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderIndex",
+            "columnName": "orderIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "radiusMeters",
+            "columnName": "radiusMeters",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preferredBearing",
+            "columnName": "preferredBearing",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "bearingTolerance",
+            "columnName": "bearingTolerance",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gateHalfWidthMeters",
+            "columnName": "gateHalfWidthMeters",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceTrackPointId",
+            "columnName": "sourceTrackPointId",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_checkpoints_checkpointVersionId_orderIndex",
+            "unique": true,
+            "columnNames": [
+              "checkpointVersionId",
+              "orderIndex"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_checkpoints_checkpointVersionId_orderIndex` ON `${TABLE_NAME}` (`checkpointVersionId`, `orderIndex`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `routeProfileId` TEXT NOT NULL, `checkpointVersionId` TEXT, `mode` TEXT NOT NULL, `status` TEXT NOT NULL, `referenceSessionIdSnapshot` TEXT, `startedWallTimeMillis` INTEGER NOT NULL, `endedWallTimeMillis` INTEGER, `bootCount` INTEGER NOT NULL, `startElapsedNanos` INTEGER, `finishElapsedNanos` INTEGER, `totalDurationNanos` INTEGER, `validity` TEXT NOT NULL, `qualityGrade` TEXT NOT NULL, `invalidReason` TEXT, `appVersion` TEXT NOT NULL, `deviceModel` TEXT NOT NULL, `androidVersion` TEXT NOT NULL, `isMockDetected` INTEGER NOT NULL, `maxSpeedMps` REAL, `maxSpeedElapsedNanos` INTEGER, `maxSpeedWallTimeMillis` INTEGER, `monthlyReferenceSessionIdSnapshot` TEXT, `weeklyReferenceSessionIdSnapshot` TEXT, `monthlyBestTotalNanos` INTEGER, `weeklyBestTotalNanos` INTEGER, `monthlyDeltaNanos` INTEGER, `weeklyDeltaNanos` INTEGER, `totalResultColor` TEXT NOT NULL, `comparisonRulesVersion` INTEGER NOT NULL, `createdAtMillis` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "routeProfileId",
+            "columnName": "routeProfileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checkpointVersionId",
+            "columnName": "checkpointVersionId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "mode",
+            "columnName": "mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "referenceSessionIdSnapshot",
+            "columnName": "referenceSessionIdSnapshot",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "startedWallTimeMillis",
+            "columnName": "startedWallTimeMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endedWallTimeMillis",
+            "columnName": "endedWallTimeMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bootCount",
+            "columnName": "bootCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startElapsedNanos",
+            "columnName": "startElapsedNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishElapsedNanos",
+            "columnName": "finishElapsedNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalDurationNanos",
+            "columnName": "totalDurationNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "validity",
+            "columnName": "validity",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "qualityGrade",
+            "columnName": "qualityGrade",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "invalidReason",
+            "columnName": "invalidReason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "appVersion",
+            "columnName": "appVersion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceModel",
+            "columnName": "deviceModel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "androidVersion",
+            "columnName": "androidVersion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isMockDetected",
+            "columnName": "isMockDetected",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxSpeedMps",
+            "columnName": "maxSpeedMps",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "maxSpeedElapsedNanos",
+            "columnName": "maxSpeedElapsedNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "maxSpeedWallTimeMillis",
+            "columnName": "maxSpeedWallTimeMillis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "monthlyReferenceSessionIdSnapshot",
+            "columnName": "monthlyReferenceSessionIdSnapshot",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "weeklyReferenceSessionIdSnapshot",
+            "columnName": "weeklyReferenceSessionIdSnapshot",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "monthlyBestTotalNanos",
+            "columnName": "monthlyBestTotalNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weeklyBestTotalNanos",
+            "columnName": "weeklyBestTotalNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "monthlyDeltaNanos",
+            "columnName": "monthlyDeltaNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weeklyDeltaNanos",
+            "columnName": "weeklyDeltaNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalResultColor",
+            "columnName": "totalResultColor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "comparisonRulesVersion",
+            "columnName": "comparisonRulesVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "createdAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sessions_routeProfileId",
+            "unique": false,
+            "columnNames": [
+              "routeProfileId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sessions_routeProfileId` ON `${TABLE_NAME}` (`routeProfileId`)"
+          },
+          {
+            "name": "index_sessions_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sessions_status` ON `${TABLE_NAME}` (`status`)"
+          },
+          {
+            "name": "index_sessions_startedWallTimeMillis",
+            "unique": false,
+            "columnNames": [
+              "startedWallTimeMillis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sessions_startedWallTimeMillis` ON `${TABLE_NAME}` (`startedWallTimeMillis`)"
+          }
+        ]
+      },
+      {
+        "tableName": "track_points",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sessionId` TEXT NOT NULL, `sequence` INTEGER NOT NULL, `latitude` REAL NOT NULL, `longitude` REAL NOT NULL, `elapsedRealtimeNanos` INTEGER NOT NULL, `wallTimeMillis` INTEGER NOT NULL, `accuracyMeters` REAL NOT NULL, `speedMps` REAL, `speedAccuracyMps` REAL, `bearingDegrees` REAL, `bearingAccuracy` REAL, `provider` TEXT NOT NULL, `isMock` INTEGER NOT NULL, `usedForTiming` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sequence",
+            "columnName": "sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elapsedRealtimeNanos",
+            "columnName": "elapsedRealtimeNanos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "wallTimeMillis",
+            "columnName": "wallTimeMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accuracyMeters",
+            "columnName": "accuracyMeters",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "speedMps",
+            "columnName": "speedMps",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "speedAccuracyMps",
+            "columnName": "speedAccuracyMps",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "bearingDegrees",
+            "columnName": "bearingDegrees",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "bearingAccuracy",
+            "columnName": "bearingAccuracy",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "provider",
+            "columnName": "provider",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isMock",
+            "columnName": "isMock",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "usedForTiming",
+            "columnName": "usedForTiming",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_track_points_sessionId_sequence",
+            "unique": true,
+            "columnNames": [
+              "sessionId",
+              "sequence"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_track_points_sessionId_sequence` ON `${TABLE_NAME}` (`sessionId`, `sequence`)"
+          },
+          {
+            "name": "index_track_points_sessionId_elapsedRealtimeNanos",
+            "unique": false,
+            "columnNames": [
+              "sessionId",
+              "elapsedRealtimeNanos"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_track_points_sessionId_elapsedRealtimeNanos` ON `${TABLE_NAME}` (`sessionId`, `elapsedRealtimeNanos`)"
+          }
+        ]
+      },
+      {
+        "tableName": "checkpoint_passes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `checkpointId` TEXT NOT NULL, `orderIndex` INTEGER NOT NULL, `passElapsedNanos` INTEGER NOT NULL, `interpolatedLatitude` REAL NOT NULL, `interpolatedLongitude` REAL NOT NULL, `triggerMode` TEXT NOT NULL, `closestDistanceMeters` REAL NOT NULL, `estimatedUncertaintyMillis` INTEGER NOT NULL, `confidence` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checkpointId",
+            "columnName": "checkpointId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderIndex",
+            "columnName": "orderIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "passElapsedNanos",
+            "columnName": "passElapsedNanos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "interpolatedLatitude",
+            "columnName": "interpolatedLatitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "interpolatedLongitude",
+            "columnName": "interpolatedLongitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "triggerMode",
+            "columnName": "triggerMode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "closestDistanceMeters",
+            "columnName": "closestDistanceMeters",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "estimatedUncertaintyMillis",
+            "columnName": "estimatedUncertaintyMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_checkpoint_passes_sessionId_orderIndex",
+            "unique": true,
+            "columnNames": [
+              "sessionId",
+              "orderIndex"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_checkpoint_passes_sessionId_orderIndex` ON `${TABLE_NAME}` (`sessionId`, `orderIndex`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sector_results",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`sessionId` TEXT NOT NULL, `sectorIndex` INTEGER NOT NULL, `durationNanos` INTEGER NOT NULL, `referenceDurationNanos` INTEGER, `previousBestDurationNanos` INTEGER, `deltaToReferenceNanos` INTEGER, `resultColorAtCompletion` TEXT NOT NULL, `recordQualified` INTEGER NOT NULL, `monthlyBestDurationNanos` INTEGER, `weeklyBestDurationNanos` INTEGER, `monthlyDeltaNanos` INTEGER, `weeklyDeltaNanos` INTEGER, `comparisonRulesVersion` INTEGER NOT NULL, PRIMARY KEY(`sessionId`, `sectorIndex`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sectorIndex",
+            "columnName": "sectorIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationNanos",
+            "columnName": "durationNanos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "referenceDurationNanos",
+            "columnName": "referenceDurationNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "previousBestDurationNanos",
+            "columnName": "previousBestDurationNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deltaToReferenceNanos",
+            "columnName": "deltaToReferenceNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "resultColorAtCompletion",
+            "columnName": "resultColorAtCompletion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordQualified",
+            "columnName": "recordQualified",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "monthlyBestDurationNanos",
+            "columnName": "monthlyBestDurationNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weeklyBestDurationNanos",
+            "columnName": "weeklyBestDurationNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "monthlyDeltaNanos",
+            "columnName": "monthlyDeltaNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weeklyDeltaNanos",
+            "columnName": "weeklyDeltaNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "comparisonRulesVersion",
+            "columnName": "comparisonRulesVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "sessionId",
+            "sectorIndex"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sector_results_sessionId",
+            "unique": false,
+            "columnNames": [
+              "sessionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sector_results_sessionId` ON `${TABLE_NAME}` (`sessionId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "gnss_snapshots",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sessionId` TEXT NOT NULL, `elapsedRealtimeNanos` INTEGER NOT NULL, `visibleGps` INTEGER NOT NULL, `usedGps` INTEGER NOT NULL, `visibleBeidou` INTEGER NOT NULL, `usedBeidou` INTEGER NOT NULL, `visibleOther` INTEGER NOT NULL, `usedOther` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elapsedRealtimeNanos",
+            "columnName": "elapsedRealtimeNanos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "visibleGps",
+            "columnName": "visibleGps",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "usedGps",
+            "columnName": "usedGps",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "visibleBeidou",
+            "columnName": "visibleBeidou",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "usedBeidou",
+            "columnName": "usedBeidou",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "visibleOther",
+            "columnName": "visibleOther",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "usedOther",
+            "columnName": "usedOther",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_gnss_snapshots_sessionId",
+            "unique": false,
+            "columnNames": [
+              "sessionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_gnss_snapshots_sessionId` ON `${TABLE_NAME}` (`sessionId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "session_evaluations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `checkpointVersionId` TEXT NOT NULL, `status` TEXT NOT NULL, `failureReason` TEXT, `startElapsedNanos` INTEGER, `finishElapsedNanos` INTEGER, `totalDurationNanos` INTEGER, `qualityGrade` TEXT NOT NULL, `recordQualified` INTEGER NOT NULL, `monthlyReferenceSessionId` TEXT, `weeklyReferenceSessionId` TEXT, `monthlyBestTotalNanos` INTEGER, `weeklyBestTotalNanos` INTEGER, `monthlyDeltaNanos` INTEGER, `weeklyDeltaNanos` INTEGER, `totalResultColor` TEXT NOT NULL, `comparisonRulesVersion` INTEGER NOT NULL, `timingEngineVersion` INTEGER NOT NULL, `createdAtMillis` INTEGER NOT NULL, `updatedAtMillis` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checkpointVersionId",
+            "columnName": "checkpointVersionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failureReason",
+            "columnName": "failureReason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "startElapsedNanos",
+            "columnName": "startElapsedNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishElapsedNanos",
+            "columnName": "finishElapsedNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalDurationNanos",
+            "columnName": "totalDurationNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "qualityGrade",
+            "columnName": "qualityGrade",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordQualified",
+            "columnName": "recordQualified",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "monthlyReferenceSessionId",
+            "columnName": "monthlyReferenceSessionId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "weeklyReferenceSessionId",
+            "columnName": "weeklyReferenceSessionId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "monthlyBestTotalNanos",
+            "columnName": "monthlyBestTotalNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weeklyBestTotalNanos",
+            "columnName": "weeklyBestTotalNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "monthlyDeltaNanos",
+            "columnName": "monthlyDeltaNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weeklyDeltaNanos",
+            "columnName": "weeklyDeltaNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalResultColor",
+            "columnName": "totalResultColor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "comparisonRulesVersion",
+            "columnName": "comparisonRulesVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timingEngineVersion",
+            "columnName": "timingEngineVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "createdAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updatedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_session_evaluations_sessionId_checkpointVersionId",
+            "unique": true,
+            "columnNames": [
+              "sessionId",
+              "checkpointVersionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_session_evaluations_sessionId_checkpointVersionId` ON `${TABLE_NAME}` (`sessionId`, `checkpointVersionId`)"
+          },
+          {
+            "name": "index_session_evaluations_checkpointVersionId",
+            "unique": false,
+            "columnNames": [
+              "checkpointVersionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_evaluations_checkpointVersionId` ON `${TABLE_NAME}` (`checkpointVersionId`)"
+          },
+          {
+            "name": "index_session_evaluations_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_session_evaluations_status` ON `${TABLE_NAME}` (`status`)"
+          }
+        ]
+      },
+      {
+        "tableName": "evaluation_passes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `evaluationId` TEXT NOT NULL, `checkpointId` TEXT NOT NULL, `orderIndex` INTEGER NOT NULL, `passElapsedNanos` INTEGER NOT NULL, `interpolatedLatitude` REAL NOT NULL, `interpolatedLongitude` REAL NOT NULL, `triggerMode` TEXT NOT NULL, `closestDistanceMeters` REAL NOT NULL, `estimatedUncertaintyMillis` INTEGER NOT NULL, `confidence` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "evaluationId",
+            "columnName": "evaluationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checkpointId",
+            "columnName": "checkpointId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderIndex",
+            "columnName": "orderIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "passElapsedNanos",
+            "columnName": "passElapsedNanos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "interpolatedLatitude",
+            "columnName": "interpolatedLatitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "interpolatedLongitude",
+            "columnName": "interpolatedLongitude",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "triggerMode",
+            "columnName": "triggerMode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "closestDistanceMeters",
+            "columnName": "closestDistanceMeters",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "estimatedUncertaintyMillis",
+            "columnName": "estimatedUncertaintyMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_evaluation_passes_evaluationId_orderIndex",
+            "unique": true,
+            "columnNames": [
+              "evaluationId",
+              "orderIndex"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_evaluation_passes_evaluationId_orderIndex` ON `${TABLE_NAME}` (`evaluationId`, `orderIndex`)"
+          }
+        ]
+      },
+      {
+        "tableName": "evaluation_sectors",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`evaluationId` TEXT NOT NULL, `sectorIndex` INTEGER NOT NULL, `durationNanos` INTEGER NOT NULL, `monthlyBestDurationNanos` INTEGER, `weeklyBestDurationNanos` INTEGER, `monthlyDeltaNanos` INTEGER, `weeklyDeltaNanos` INTEGER, `resultColorAtCompletion` TEXT NOT NULL, `recordQualified` INTEGER NOT NULL, `comparisonRulesVersion` INTEGER NOT NULL, PRIMARY KEY(`evaluationId`, `sectorIndex`))",
+        "fields": [
+          {
+            "fieldPath": "evaluationId",
+            "columnName": "evaluationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sectorIndex",
+            "columnName": "sectorIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationNanos",
+            "columnName": "durationNanos",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "monthlyBestDurationNanos",
+            "columnName": "monthlyBestDurationNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weeklyBestDurationNanos",
+            "columnName": "weeklyBestDurationNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "monthlyDeltaNanos",
+            "columnName": "monthlyDeltaNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "weeklyDeltaNanos",
+            "columnName": "weeklyDeltaNanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "resultColorAtCompletion",
+            "columnName": "resultColorAtCompletion",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recordQualified",
+            "columnName": "recordQualified",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "comparisonRulesVersion",
+            "columnName": "comparisonRulesVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "evaluationId",
+            "sectorIndex"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_evaluation_sectors_evaluationId",
+            "unique": false,
+            "columnNames": [
+              "evaluationId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_evaluation_sectors_evaluationId` ON `${TABLE_NAME}` (`evaluationId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "checkpoint_recalculation_jobs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `routeProfileId` TEXT NOT NULL, `checkpointVersionId` TEXT NOT NULL, `sourceSessionId` TEXT NOT NULL, `status` TEXT NOT NULL, `totalSessions` INTEGER NOT NULL, `completedSessions` INTEGER NOT NULL, `successfulSessions` INTEGER NOT NULL, `failedSessions` INTEGER NOT NULL, `errorMessage` TEXT, `createdAtMillis` INTEGER NOT NULL, `updatedAtMillis` INTEGER NOT NULL, `finishedAtMillis` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "routeProfileId",
+            "columnName": "routeProfileId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checkpointVersionId",
+            "columnName": "checkpointVersionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceSessionId",
+            "columnName": "sourceSessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalSessions",
+            "columnName": "totalSessions",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completedSessions",
+            "columnName": "completedSessions",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "successfulSessions",
+            "columnName": "successfulSessions",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failedSessions",
+            "columnName": "failedSessions",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "errorMessage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "createdAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updatedAtMillis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finishedAtMillis",
+            "columnName": "finishedAtMillis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_checkpoint_recalculation_jobs_checkpointVersionId",
+            "unique": true,
+            "columnNames": [
+              "checkpointVersionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_checkpoint_recalculation_jobs_checkpointVersionId` ON `${TABLE_NAME}` (`checkpointVersionId`)"
+          },
+          {
+            "name": "index_checkpoint_recalculation_jobs_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_checkpoint_recalculation_jobs_status` ON `${TABLE_NAME}` (`status`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '541fe5530952622cee5bb0debefb1cc9')"
+    ]
+  }
+}

@@ -1,0 +1,2 @@
+-keep class app.deltat.commute.data.** { *; }
+-keepattributes *Annotation*

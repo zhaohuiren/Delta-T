@@ -1,0 +1,11 @@
+erDiagram
+  ROUTE_PROFILE ||--o{ CHECKPOINT_VERSION : owns
+  CHECKPOINT_VERSION ||--|{ CHECKPOINT : contains
+  ROUTE_PROFILE ||--o{ SESSION : records
+  CHECKPOINT_VERSION ||--o{ SESSION : snapshots
+  SESSION ||--o{ TRACK_POINT : contains
+  SESSION ||--o{ CHECKPOINT_PASS : confirms
+  SESSION ||--o{ SECTOR_RESULT : yields
+  SESSION ||--o{ GNSS_SNAPSHOT : diagnoses
+  ROUTE_PROFILE o|--o| SESSION : reference
+

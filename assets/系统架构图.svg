@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980">
+  <defs>
+    <style>
+      .bg{fill:#07090d}.panel{fill:#11151c;stroke:#364152;stroke-width:2}.core{fill:#181123;stroke:#a855f7;stroke-width:3}
+      .platform{fill:#0c1a16;stroke:#22c55e;stroke-width:2}.data{fill:#1d180c;stroke:#f5b942;stroke-width:2}
+      .title{fill:#fff;font:700 36px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
+      .h{fill:#fff;font:700 24px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
+      .t{fill:#cbd5e1;font:18px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
+      .small{fill:#94a3b8;font:16px -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
+      .arrow{stroke:#94a3b8;stroke-width:3;fill:none;marker-end:url(#end)}
+    </style>
+    <marker id="end" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+  </defs>
+  <rect class="bg" width="1600" height="980"/>
+  <text class="title" x="80" y="70">通勤分段计时器 · Android 系统架构</text>
+  <text class="small" x="80" y="105">A→S1→S2→B；路径可变；用户前台启动，锁屏持续计时</text>
+
+  <rect class="panel" x="80" y="150" width="1440" height="130" rx="18"/>
+  <text class="h" x="115" y="195">Compose UI / Feature</text>
+  <text class="t" x="115" y="235">首页　路线设置　等待起点　计时中　锁屏通知　完成　历史　个人纪录　设置</text>
+
+  <rect class="panel" x="80" y="330" width="1440" height="110" rx="18"/>
+  <text class="h" x="115" y="375">Application / Use Cases</text>
+  <text class="t" x="115" y="412">进入准备 · 处理定位 · 完成行程 · 切换基准 · 重算纪录 · 导出诊断</text>
+
+  <rect class="core" x="300" y="500" width="1000" height="190" rx="22"/>
+  <text class="h" x="340" y="548">Pure Kotlin Domain（核心真相）</text>
+  <text class="t" x="340" y="595">TimingEngine　CheckpointDetector　LocationQualityEvaluator</text>
+  <text class="t" x="340" y="635">Geometry / Interpolation　RecordJudge　TrackProjector / Simplifier</text>
+  <text class="small" x="340" y="670">不依赖 Android UI、Room、高德 SDK；使用模拟轨迹做确定性测试</text>
+
+  <rect class="platform" x="80" y="760" width="680" height="150" rx="18"/>
+  <text class="h" x="115" y="808">Android Platform</text>
+  <text class="t" x="115" y="850">LocationManager + GnssStatus</text>
+  <text class="t" x="115" y="882">Location Foreground Service · Notification · AMap Editor Adapter</text>
+
+  <rect class="data" x="840" y="760" width="680" height="150" rx="18"/>
+  <text class="h" x="875" y="808">Local Data</text>
+  <text class="t" x="875" y="850">Repositories · Room · DataStore</text>
+  <text class="t" x="875" y="882">轨迹增量落盘 · Checkpoint 版本 · 基准/PB/分段最佳</text>
+
+  <path class="arrow" d="M800 280 L800 330"/>
+  <path class="arrow" d="M800 440 L800 500"/>
+  <path class="arrow" d="M470 760 L560 690"/>
+  <path class="arrow" d="M1130 760 L1040 690"/>
+  <path class="arrow" d="M760 835 L840 835"/>
+</svg>
