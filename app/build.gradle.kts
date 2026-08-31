@@ -1,17 +1,8 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.android.legacy-kapt")
 }
-
-val localProperties = Properties().apply {
-    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
-}
-val amapApiKey = providers.gradleProperty("AMAP_API_KEY")
-    .orElse(providers.environmentVariable("AMAP_API_KEY"))
-    .orElse(localProperties.getProperty("AMAP_API_KEY", ""))
 
 android {
     namespace = "app.deltat.commute"
@@ -21,31 +12,14 @@ android {
         applicationId = "app.deltat.commute"
         minSdk = 29
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.4.0-test"
+        versionCode = 9
+        versionName = "0.5.0-test"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
-        buildConfigField("String", "AMAP_API_KEY", "\"\"")
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments["room.schemaLocation"] = "$projectDir/schemas"
             }
-        }
-    }
-
-    flavorDimensions += "map"
-    productFlavors {
-        create("fallback") {
-            dimension = "map"
-            versionNameSuffix = "-fallback"
-            buildConfigField("boolean", "AMAP_AVAILABLE", "false")
-        }
-        create("amap") {
-            dimension = "map"
-            val key = amapApiKey.get()
-            buildConfigField("boolean", "AMAP_AVAILABLE", "true")
-            buildConfigField("String", "AMAP_API_KEY", "\"$key\"")
-            manifestPlaceholders["AMAP_API_KEY"] = key
         }
     }
 
@@ -104,8 +78,6 @@ dependencies {
     // Room 2.8.4 migration bundles are generated against serialization 1.8.1.
     // Pin the app/test runtime to the same binary-compatible version.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
-
-    "amapImplementation"("com.amap.api:3dmap:10.0.600")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

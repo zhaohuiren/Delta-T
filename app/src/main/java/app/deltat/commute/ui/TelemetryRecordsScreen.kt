@@ -1,5 +1,6 @@
 package app.deltat.commute.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -10,20 +11,30 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import app.deltat.commute.data.LeaderboardRow
 import app.deltat.commute.data.RouteProfileEntity
 import app.deltat.commute.data.SessionListRow
-import app.deltat.commute.data.comparisonPeriodBounds
+import app.deltat.commute.domain.*
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Date
 import java.util.Locale
 
+private enum class RecordsTab(val title: String) { LEADERBOARD("排行榜"), MONTH("月统计"), WEEK("周统计") }
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TelemetryRecordsScreen(
     routes: List<RouteProfileEntity>,
@@ -33,131 +44,290 @@ fun TelemetryRecordsScreen(
 ) {
     val displayRoutes = remember(routes) { routesForRecords(routes) }
     var selectedRouteId by remember(displayRoutes) { mutableStateOf(displayRoutes.firstOrNull()?.id) }
-    val rows = remember(selectedRouteId, leaderboard, sessions, routes) {
+    var tab by remember { mutableStateOf(RecordsTab.LEADERBOARD) }
+    var filter by remember { mutableStateOf<LeaderboardPeriodFilter>(LeaderboardPeriodFilter.ThisMonth) }
+    var customRange by remember { mutableStateOf<LeaderboardPeriodFilter.Custom?>(null) }
+    var showDateRange by remember { mutableStateOf(false) }
+
+    val allRows = remember(selectedRouteId, leaderboard, sessions, routes) {
         val projected = if (leaderboard.isNotEmpty()) leaderboard else sessions.mapNotNull { row ->
             val route = routes.firstOrNull { it.id == row.routeProfileId }
             row.totalDurationNanos?.takeIf {
                 row.validity == "VALID" && row.qualityGrade in setOf("A", "B") && row.checkpointVersionId == route?.activeCheckpointVersionId
             }?.let { duration ->
-                LeaderboardRow(row.id, row.routeProfileId, row.routeName, row.startedWallTimeMillis, duration, row.qualityGrade, null, null, null)
+                LeaderboardRow(
+                    row.id, row.routeProfileId, row.routeName, row.startedWallTimeMillis, duration, row.qualityGrade,
+                    null, null, null, row.timingEngineVersion, row.missingCheckpointMask,
+                )
             }
         }
         projected.filter { it.routeProfileId == selectedRouteId }
+    }
+    val periodRange = remember(filter) { StatisticsAggregator.range(filter) }
+    val rankedRows = remember(allRows, periodRange) {
+        allRows.filter { periodRange.contains(it.startedWallTimeMillis) }
             .sortedWith(compareBy<LeaderboardRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.sessionId })
     }
-    val theoreticalBest = listOf(
-        rows.mapNotNull { it.sector1Nanos }.minOrNull(),
-        rows.mapNotNull { it.sector2Nanos }.minOrNull(),
-        rows.mapNotNull { it.sector3Nanos }.minOrNull(),
-    ).takeIf { it.all { value -> value != null } }?.sumOf { requireNotNull(it) }
-    val bounds = remember(rows) { comparisonPeriodBounds(System.currentTimeMillis()) }
-    val monthBestId = rows.filter { it.startedWallTimeMillis in bounds.monthStartMillis until bounds.endExclusiveMillis }.firstOrNull()?.sessionId
-    val weekBestId = rows.filter { it.startedWallTimeMillis in bounds.weekStartMillis until bounds.endExclusiveMillis }.firstOrNull()?.sessionId
+    val leaderboardLaps = remember(rankedRows) {
+        rankedRows.map { row ->
+            LeaderboardLap(
+                row.sessionId, row.totalDurationNanos,
+                listOf(row.sector1Nanos, row.sector2Nanos, row.sector3Nanos),
+                row.startedWallTimeMillis, row.timingEngineVersion,
+            )
+        }
+    }
+    val theoreticalBest = remember(leaderboardLaps) { LeaderboardProjector.theoreticalBestNanos(leaderboardLaps) }
+    val timedResults = remember(allRows) { allRows.map { TimedResultSummary(it.sessionId, it.startedWallTimeMillis, it.totalDurationNanos) } }
+    val monthly = remember(timedResults) { StatisticsAggregator.monthly(timedResults) }
+    val weekly = remember(timedResults) { StatisticsAggregator.weekly(timedResults) }
+
+    if (showDateRange) {
+        DateRangeDialog(
+            initial = customRange,
+            onDismiss = { showDateRange = false },
+            onConfirm = { selected -> customRange = selected; filter = selected; showDateRange = false },
+        )
+    }
 
     Surface(Modifier.fillMaxSize(), color = Background, contentColor = TelemetryWhite) {
         Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("个人纪录", fontSize = 25.sp, fontWeight = FontWeight.Bold)
-            }
-            LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("个人纪录", fontSize = 27.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp))
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(13.dp),
+            ) {
                 item {
-                    if (displayRoutes.isNotEmpty()) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    if (displayRoutes.isNotEmpty()) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
                         displayRoutes.take(4).forEachIndexed { index, route ->
                             SegmentedButton(
                                 selected = selectedRouteId == route.id,
                                 onClick = { selectedRouteId = route.id },
                                 shape = SegmentedButtonDefaults.itemShape(index, displayRoutes.take(4).size),
-                            ) { Text(route.name, maxLines = 1) }
+                            ) { Text(route.name, maxLines = 1, fontSize = 16.sp) }
                         }
                     }
                 }
-                if (displayRoutes.isEmpty()) item {
-                    Box(Modifier.fillParentMaxSize().padding(40.dp), contentAlignment = Alignment.Center) {
-                        Text("请先建立路线并完成有效行程", color = Muted)
-                    }
-                } else {
-                    item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            RecordMetric("PB", rows.firstOrNull()?.totalDurationNanos?.let(::formatRecordDuration) ?: "--", Modifier.weight(1f))
-                            RecordMetric("理论最佳", theoreticalBest?.let(::formatRecordDuration) ?: "--", Modifier.weight(1f))
-                            RecordMetric("有效行程", rows.size.toString(), Modifier.weight(1f))
+                item {
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().heightIn(min = 54.dp).testTag("records-tabs")) {
+                        RecordsTab.entries.forEachIndexed { index, item ->
+                            SegmentedButton(
+                                selected = tab == item,
+                                onClick = { tab = item },
+                                shape = SegmentedButtonDefaults.itemShape(index, RecordsTab.entries.size),
+                            ) { Text(item.title, fontWeight = if (tab == item) FontWeight.Bold else FontWeight.Normal) }
                         }
                     }
-                    item {
-                        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                            Text("全部历史有效成绩 · 从快到慢", color = Muted, fontSize = 13.sp)
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-                                Text("排名", color = Muted, modifier = Modifier.width(54.dp), fontSize = 12.sp)
-                                Text("成绩", color = Muted, modifier = Modifier.weight(1f), fontSize = 12.sp)
-                                Text("GAP", color = Muted, fontSize = 12.sp)
-                            }
-                        }
-                    }
-                    if (rows.isEmpty()) item {
-                        Card(colors = CardDefaults.cardColors(containerColor = Surface)) {
-                            Column(Modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("还没有有效成绩", fontWeight = FontWeight.Bold)
-                                Text("质量 A/B 的完成行程会进入排行榜", color = Muted, fontSize = 13.sp)
-                            }
-                        }
-                    }
-                    itemsIndexed(rows, key = { _, row -> row.sessionId }) { index, row ->
-                        LeaderboardCard(
-                            position = index + 1,
-                            row = row,
-                            gap = row.totalDurationNanos - rows.first().totalDurationNanos,
-                            isMonthBest = row.sessionId == monthBestId,
-                            isWeekBest = row.sessionId == weekBestId,
-                            onClick = { onOpenSession(row.sessionId) },
-                        )
-                    }
+                }
+                if (displayRoutes.isEmpty()) item { RecordsEmpty("请先建立路线并完成有效行程") }
+                else when (tab) {
+                    RecordsTab.LEADERBOARD -> leaderboardContent(
+                        rows = rankedRows,
+                        theoreticalBest = theoreticalBest,
+                        filter = filter,
+                        onFilter = { selected ->
+                            if (selected == null) showDateRange = true else filter = selected
+                        },
+                        onOpenSession = onOpenSession,
+                    )
+                    RecordsTab.MONTH -> aggregateContent(monthly, monthly = true)
+                    RecordsTab.WEEK -> aggregateContent(weekly, monthly = false)
                 }
             }
         }
     }
 }
 
+private fun androidx.compose.foundation.lazy.LazyListScope.leaderboardContent(
+    rows: List<LeaderboardRow>,
+    theoreticalBest: Long?,
+    filter: LeaderboardPeriodFilter,
+    onFilter: (LeaderboardPeriodFilter?) -> Unit,
+    onOpenSession: (String) -> Unit,
+) {
+    item {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PeriodButton("本周", filter is LeaderboardPeriodFilter.ThisWeek, Modifier.weight(1f)) { onFilter(LeaderboardPeriodFilter.ThisWeek) }
+            PeriodButton("本月", filter is LeaderboardPeriodFilter.ThisMonth, Modifier.weight(1f)) { onFilter(LeaderboardPeriodFilter.ThisMonth) }
+            PeriodButton("全部", filter is LeaderboardPeriodFilter.All, Modifier.weight(1f)) { onFilter(LeaderboardPeriodFilter.All) }
+            PeriodButton("自定义", filter is LeaderboardPeriodFilter.Custom, Modifier.weight(1f)) { onFilter(null) }
+        }
+    }
+    item { RecordsHero(rows.firstOrNull()?.totalDurationNanos, theoreticalBest, rows.size) }
+    if (rows.isEmpty()) item { RecordsEmpty("当前范围没有有效成绩") }
+    itemsIndexed(rows, key = { _, row -> row.sessionId }) { index, row ->
+        LeaderboardCard(
+            position = index + 1,
+            row = row,
+            gap = row.totalDurationNanos - rows.first().totalDurationNanos,
+            onClick = { onOpenSession(row.sessionId) },
+        )
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.aggregateContent(rows: List<PeriodAggregate>, monthly: Boolean) {
+    val latest = rows.lastOrNull()
+    item {
+        Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(18.dp)) {
+            Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text(if (monthly) "最近月平均" else "最近周平均", color = RacingRed, fontWeight = FontWeight.Bold)
+                Text(
+                    latest?.averageDurationNanos?.let(::formatRecordDuration) ?: "--",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 42.sp,
+                    fontWeight = FontWeight.Black,
+                )
+                Text(latest?.let { "${periodLabel(it, monthly)} · ${it.tripCount} 次有效行程" } ?: "暂无有效周期", color = Muted)
+            }
+        }
+    }
+    if (rows.isEmpty()) item { RecordsEmpty(if (monthly) "还没有月统计数据" else "还没有周统计数据") }
+    else {
+        item { PeriodTrendChart(rows, monthly, Modifier.fillMaxWidth().height(220.dp)) }
+        itemsIndexed(rows.asReversed(), key = { _, row -> row.periodStart.toString() }) { _, row -> PeriodAggregateCard(row, monthly) }
+    }
+}
+
 @Composable
-private fun RecordMetric(label: String, value: String, modifier: Modifier) {
-    Card(modifier, colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(14.dp)) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(label, color = Muted, fontSize = 12.sp)
-            Text(value, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+private fun PeriodButton(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.height(50.dp),
+        colors = ButtonDefaults.outlinedButtonColors(containerColor = if (selected) RacingRed else Color.Transparent),
+        border = ButtonDefaults.outlinedButtonBorder(enabled = true).copy(brush = androidx.compose.ui.graphics.SolidColor(if (selected) RacingRed else Color(0xFF3B4147))),
+        contentPadding = PaddingValues(horizontal = 2.dp),
+    ) { Text(label, maxLines = 1, fontSize = 13.sp) }
+}
+
+@Composable
+private fun RecordsHero(pb: Long?, theoreticalBest: Long?, count: Int) {
+    Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("筛选范围 PB", color = RacingRed, fontWeight = FontWeight.Bold)
+            Text(pb?.let(::formatRecordDuration) ?: "--", fontFamily = FontFamily.Monospace, fontSize = 44.sp, fontWeight = FontWeight.Black)
+            HorizontalDivider(color = Color(0xFF343A40))
+            Row {
+                RecordMetricInline("理论最佳", theoreticalBest?.let(::formatRecordDuration) ?: "--", Modifier.weight(1f))
+                RecordMetricInline("有效行程", count.toString(), Modifier.weight(1f))
+            }
         }
     }
 }
 
 @Composable
-private fun LeaderboardCard(
-    position: Int,
-    row: LeaderboardRow,
-    gap: Long,
-    isMonthBest: Boolean,
-    isWeekBest: Boolean,
-    onClick: () -> Unit,
-) {
+private fun RecordMetricInline(label: String, value: String, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, color = Muted, fontSize = 13.sp)
+        Text(value, fontFamily = FontFamily.Monospace, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun LeaderboardCard(position: Int, row: LeaderboardRow, gap: Long, onClick: () -> Unit) {
     Card(
         Modifier.fillMaxWidth().testTag("leaderboard-P$position").clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = Surface),
         shape = RoundedCornerShape(16.dp),
     ) {
-        Row {
-            Box(Modifier.width(if (position == 1) 4.dp else 2.dp).heightIn(min = 142.dp).background(if (position == 1) RacingRed else Muted))
-            Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("P$position", modifier = Modifier.width(54.dp), fontSize = if (position == 1) 25.sp else 21.sp, fontWeight = FontWeight.Black)
-                    Text(formatRecordDuration(row.totalDurationNanos), modifier = Modifier.weight(1f), fontFamily = FontFamily.Monospace, fontSize = if (position == 1) 23.sp else 20.sp, fontWeight = FontWeight.Bold)
-                    if (position == 1) SmallBadge("PB", TelemetryWhite) else Text("+${formatRecordDuration(gap)}", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("P$position", color = RacingRed, fontSize = if (position == 1) 28.sp else 23.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(62.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(formatRecordDuration(row.totalDurationNanos), fontFamily = FontFamily.Monospace, fontSize = if (position == 1) 25.sp else 21.sp, fontWeight = FontWeight.Bold)
+                    Text(if (position == 1) "GAP —" else "GAP +${formatRecordDuration(gap)}", color = Muted, fontSize = 12.sp)
                 }
-                Row(Modifier.fillMaxWidth().padding(start = 54.dp)) {
-                    SectorValue("S1", row.sector1Nanos, Modifier.weight(1f))
-                    SectorValue("S2", row.sector2Nanos, Modifier.weight(1f))
-                    SectorValue("S3", row.sector3Nanos, Modifier.weight(1f))
+                Text(if (position == 1) "PB · 质量 ${row.qualityGrade}" else "质量 ${row.qualityGrade}", color = Purple, fontSize = 12.sp)
+            }
+            HorizontalDivider(color = Color(0xFF343A40))
+            Row {
+                SectorValue("A→S1", row.sector1Nanos, row.missingCheckpointMask and (1 shl 1) != 0, Modifier.weight(1f))
+                SectorValue("S1→S2", row.sector2Nanos, row.missingCheckpointMask and ((1 shl 1) or (1 shl 2)) != 0, Modifier.weight(1f))
+                SectorValue("S2→B", row.sector3Nanos, row.missingCheckpointMask and (1 shl 2) != 0, Modifier.weight(1f))
+            }
+            Text(formatRecordDate(row.startedWallTimeMillis), color = Muted, fontSize = 12.sp)
+            if (row.missingCheckpointMask != 0) Text("总程有效 · 部分检查点缺失", color = Yellow, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun SectorValue(label: String, nanos: Long?, missing: Boolean, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(label, color = Muted, fontSize = 10.sp)
+        Text(nanos?.let(::formatRecordDuration) ?: "--", fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1)
+        if (missing) Text("检查点缺失", color = Muted, fontSize = 9.sp)
+    }
+}
+
+@Composable
+private fun PeriodAggregateCard(row: PeriodAggregate, monthly: Boolean) {
+    Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(15.dp)) {
+        Row(Modifier.fillMaxWidth().padding(17.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(periodLabel(row, monthly), fontWeight = FontWeight.Bold)
+                Text("${row.tripCount} 次有效行程", color = Muted, fontSize = 12.sp)
+            }
+            Text(formatRecordDuration(row.averageDurationNanos), fontFamily = FontFamily.Monospace, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun PeriodTrendChart(rows: List<PeriodAggregate>, monthly: Boolean, modifier: Modifier) {
+    Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(16.dp), modifier = modifier) {
+        Column(Modifier.padding(16.dp)) {
+            Text("平均用时趋势", fontWeight = FontWeight.Bold)
+            Canvas(Modifier.fillMaxSize().padding(top = 16.dp, start = 4.dp, end = 4.dp, bottom = 4.dp)) {
+                if (rows.isEmpty()) return@Canvas
+                val durations = rows.map { it.averageDurationNanos }
+                val min = durations.minOrNull()!!.toFloat()
+                val max = durations.maxOrNull()!!.toFloat()
+                val span = (max - min).coerceAtLeast(1f)
+                val totalSlots = if (monthly) {
+                    ChronoUnit.MONTHS.between(rows.first().periodStart.withDayOfMonth(1), rows.last().periodStart.withDayOfMonth(1)).toInt() + 1
+                } else ChronoUnit.WEEKS.between(rows.first().periodStart, rows.last().periodStart).toInt() + 1
+                val offsets = rows.map { row ->
+                    val slot = if (monthly) ChronoUnit.MONTHS.between(rows.first().periodStart.withDayOfMonth(1), row.periodStart.withDayOfMonth(1)).toInt()
+                    else ChronoUnit.WEEKS.between(rows.first().periodStart, row.periodStart).toInt()
+                    Offset(
+                        x = if (totalSlots == 1) size.width / 2 else size.width * slot / (totalSlots - 1),
+                        y = size.height - (row.averageDurationNanos.toFloat() - min) / span * size.height,
+                    )
                 }
-                Row(Modifier.fillMaxWidth().padding(start = 54.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${formatRecordDate(row.startedWallTimeMillis)} · 质量 ${row.qualityGrade}", color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                    if (isMonthBest) SmallBadge("本月最快", Purple)
-                    if (isWeekBest) { Spacer(Modifier.width(6.dp)); SmallBadge("本周最快", Green) }
+                offsets.zipWithNext().forEachIndexed { index, (a, b) ->
+                    val gap = if (monthly) ChronoUnit.MONTHS.between(rows[index].periodStart.withDayOfMonth(1), rows[index + 1].periodStart.withDayOfMonth(1))
+                    else ChronoUnit.WEEKS.between(rows[index].periodStart, rows[index + 1].periodStart)
+                    if (gap == 1L) drawLine(RacingRed, a, b, strokeWidth = 3.dp.toPx())
+                }
+                offsets.forEach { point -> drawCircle(RacingRed, 5.dp.toPx(), point); drawCircle(Color.White, 2.dp.toPx(), point) }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DateRangeDialog(initial: LeaderboardPeriodFilter.Custom?, onDismiss: () -> Unit, onConfirm: (LeaderboardPeriodFilter.Custom) -> Unit) {
+    val zone = ZoneId.systemDefault()
+    val state = rememberDateRangePickerState(
+        initialSelectedStartDateMillis = initial?.startDate?.atStartOfDay(zone)?.toInstant()?.toEpochMilli(),
+        initialSelectedEndDateMillis = initial?.endDateInclusive?.atStartOfDay(zone)?.toInstant()?.toEpochMilli(),
+    )
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(24.dp), color = Surface, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp)) {
+                Text("选择日期范围", fontSize = 21.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(12.dp))
+                DateRangePicker(state = state, modifier = Modifier.fillMaxWidth().height(460.dp), title = null, headline = null)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    TextButton(
+                        enabled = state.selectedStartDateMillis != null && state.selectedEndDateMillis != null,
+                        onClick = {
+                            val start = Instant.ofEpochMilli(requireNotNull(state.selectedStartDateMillis)).atZone(zone).toLocalDate()
+                            val end = Instant.ofEpochMilli(requireNotNull(state.selectedEndDateMillis)).atZone(zone).toLocalDate()
+                            onConfirm(LeaderboardPeriodFilter.Custom(start, end))
+                        },
+                    ) { Text("应用") }
                 }
             }
         }
@@ -165,32 +335,29 @@ private fun LeaderboardCard(
 }
 
 @Composable
-private fun SectorValue(label: String, nanos: Long?, modifier: Modifier) {
-    Column(modifier) {
-        Text(label, color = Muted, fontSize = 10.sp)
-        Text(nanos?.let(::formatRecordDuration) ?: "--", fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1)
+private fun RecordsEmpty(text: String) {
+    Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(16.dp)) {
+        Box(Modifier.fillMaxWidth().padding(vertical = 34.dp, horizontal = 20.dp), contentAlignment = Alignment.Center) {
+            Text(text, color = Muted)
+        }
     }
 }
 
-@Composable
-private fun SmallBadge(text: String, color: androidx.compose.ui.graphics.Color) {
-    Text(text, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.background(color.copy(alpha = .14f), RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 4.dp))
-}
+internal fun routesForRecords(routes: List<RouteProfileEntity>): List<RouteProfileEntity> = routes.sortedWith(
+    compareBy<RouteProfileEntity> {
+        when (it.directionType) { "TO_WORK" -> 0; "FROM_WORK" -> 2; else -> 1 }
+    }.thenBy { it.name },
+)
 
-internal fun routesForRecords(routes: List<RouteProfileEntity>): List<RouteProfileEntity> =
-    routes.sortedWith(
-        compareBy<RouteProfileEntity> {
-            when (it.directionType) {
-                "TO_WORK" -> 0
-                "FROM_WORK" -> 2
-                else -> 1
-            }
-        }.thenBy { it.name },
-    )
+private fun periodLabel(row: PeriodAggregate, monthly: Boolean): String = if (monthly) {
+    row.periodStart.format(DateTimeFormatter.ofPattern("yyyy年M月"))
+} else {
+    "${row.periodStart.format(DateTimeFormatter.ofPattern("M月d日"))}–${row.periodEndInclusive.format(DateTimeFormatter.ofPattern("M月d日"))}"
+}
 
 private fun formatRecordDuration(nanos: Long): String {
     val hundredths = nanos / 10_000_000
     return "%02d:%02d.%02d".format(hundredths / 6_000, (hundredths / 100) % 60, hundredths % 100)
 }
 
-private fun formatRecordDate(millis: Long): String = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(millis))
+private fun formatRecordDate(millis: Long): String = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(millis))

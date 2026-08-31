@@ -74,6 +74,8 @@ data class SessionEntity(
     val weeklyDeltaNanos: Long? = null,
     val totalResultColor: String = "NEUTRAL",
     val comparisonRulesVersion: Int = 3,
+    val missingCheckpointMask: Int = 0,
+    val timingEngineVersion: Int = 1,
     val createdAtMillis: Long,
 )
 
@@ -156,6 +158,7 @@ data class SessionEvaluationEntity(
     val totalResultColor: String = "NEUTRAL",
     val comparisonRulesVersion: Int = 3,
     val timingEngineVersion: Int = 1,
+    val missingCheckpointMask: Int = 0,
     val createdAtMillis: Long,
     val updatedAtMillis: Long,
 )
@@ -253,6 +256,8 @@ data class SessionListRow(
     val evaluationFailureReason: String? = null,
     val evaluationCreatedAtMillis: Long? = null,
     val evaluationEngineVersion: Int? = null,
+    val missingCheckpointMask: Int = 0,
+    val timingEngineVersion: Int = 1,
     val isCurrentReference: Boolean = false,
 )
 
@@ -269,4 +274,6 @@ data class LeaderboardRow(
     val sector1Nanos: Long?,
     val sector2Nanos: Long?,
     val sector3Nanos: Long?,
+    val timingEngineVersion: Int = 1,
+    val missingCheckpointMask: Int = 0,
 )

@@ -12,10 +12,10 @@ if [[ -d "$ROOT/.toolchain/android-sdk" ]]; then
 fi
 export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$ROOT/.gradle-user-home}"
 
-./gradlew :app:testFallbackDebugUnitTest :app:lintFallbackDebug :app:assembleFallbackDebug
+./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 
 mkdir -p "$ROOT/dist"
-cp "$ROOT/app/build/outputs/apk/fallback/debug/app-fallback-debug.apk" \
-  "$ROOT/dist/Delta-T-0.4.0-fallback-debug.apk"
+cp "$ROOT/app/build/outputs/apk/debug/app-debug.apk" \
+  "$ROOT/dist/Delta-T-0.5.0-debug.apk"
 
-echo "Built: $ROOT/dist/Delta-T-0.4.0-fallback-debug.apk"
+echo "Built: $ROOT/dist/Delta-T-0.5.0-debug.apk"

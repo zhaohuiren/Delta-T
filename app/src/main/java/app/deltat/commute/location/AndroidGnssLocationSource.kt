@@ -31,11 +31,8 @@ class AndroidGnssLocationSource(context: Context) : LocationSource, LocationList
                     else -> { otherVisible++; if (used) otherUsed++ }
                 }
             }
-            val totalUsed = gpsUsed + beidouUsed + otherUsed
-            onGnss?.invoke(
-                GnssHealth(gpsVisible, gpsUsed, beidouVisible, beidouUsed, otherVisible, otherUsed,
-                    when { totalUsed >= 8 -> "GNSS 良好"; totalUsed >= 4 -> "GNSS 一般"; else -> "正在提高精度" }),
-            )
+            val health = GnssHealth(gpsVisible, gpsUsed, beidouVisible, beidouUsed, otherVisible, otherUsed)
+            onGnss?.invoke(health.copy(label = health.displayLabel()))
         }
     }
 
@@ -72,7 +69,7 @@ class AndroidGnssLocationSource(context: Context) : LocationSource, LocationList
         )
     }
 
-    override fun onProviderDisabled(provider: String) = onGnss?.invoke(GnssHealth(label = "系统定位已关闭")) ?: Unit
+    override fun onProviderDisabled(provider: String) = onGnss?.invoke(GnssHealth(label = "定位已关闭", locationEnabled = false)) ?: Unit
     override fun onProviderEnabled(provider: String) = Unit
     @Deprecated("Deprecated in Java") override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
 }

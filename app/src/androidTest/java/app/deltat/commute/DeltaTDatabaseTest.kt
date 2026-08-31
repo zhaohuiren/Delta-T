@@ -112,6 +112,28 @@ class DeltaTDatabaseTest {
         }
     }
 
+    @Test fun migrationFourToFivePreservesRowsAndAddsSparsePassMetadata() {
+        migrationHelper.createDatabase("migration-v5-test", 4).apply {
+            execSQL("INSERT INTO route_profiles (id,name,directionType,activeCheckpointVersionId,referenceSessionId,createdAtMillis,updatedAtMillis,archived) VALUES ('r','上班','TO_WORK','v',NULL,1,1,0)")
+            execSQL("INSERT INTO checkpoint_versions (id,routeProfileId,versionNumber,createdFromSessionId,createdAtMillis,active,changeReason) VALUES ('v','r',1,NULL,1,1,'test')")
+            execSQL("INSERT INTO sessions (id,routeProfileId,checkpointVersionId,mode,status,startedWallTimeMillis,bootCount,totalDurationNanos,validity,qualityGrade,appVersion,deviceModel,androidVersion,isMockDetected,totalResultColor,comparisonRulesVersion,createdAtMillis) VALUES ('s','r','v','TIMED','COMPLETED',1000,0,100,'VALID','A','0.4','test','16',0,'NEUTRAL',2,1000)")
+            execSQL("INSERT INTO session_evaluations (id,sessionId,checkpointVersionId,status,totalDurationNanos,qualityGrade,recordQualified,totalResultColor,comparisonRulesVersion,timingEngineVersion,createdAtMillis,updatedAtMillis) VALUES ('e','s','v','VALID',100,'A',1,'NEUTRAL',2,1,1000,1000)")
+            close()
+        }
+        migrationHelper.runMigrationsAndValidate("migration-v5-test", 5, true, DeltaTDatabase.MIGRATION_4_5).use { db ->
+            db.query("SELECT missingCheckpointMask,timingEngineVersion FROM sessions WHERE id='s'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+                assertEquals(1, cursor.getInt(1))
+            }
+            db.query("SELECT missingCheckpointMask,timingEngineVersion FROM session_evaluations WHERE id='e'").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+                assertEquals(1, cursor.getInt(1))
+            }
+        }
+    }
+
     @Test fun routeRoundTrip() = runTest {
         val db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), DeltaTDatabase::class.java).build()
         val route = RouteProfileEntity("r", "上班", "TO_WORK", createdAtMillis = 1, updatedAtMillis = 1)
@@ -146,7 +168,7 @@ class DeltaTDatabaseTest {
         dao.insertRoute(RouteProfileEntity("r", "上班", "TO_WORK", activeCheckpointVersionId = "v", createdAtMillis = 1, updatedAtMillis = 1))
         suspend fun insert(id: String, total: Long, sectors: List<Long>, started: Long) {
             dao.insertSession(SessionEntity(id, "r", "v", "TIMED", "COMPLETED", null, started, totalDurationNanos = total, validity = "VALID", qualityGrade = "A", bootCount = 0, appVersion = "test", deviceModel = "test", androidVersion = "16", createdAtMillis = started))
-            dao.insertEvaluation(SessionEvaluationEntity("e-$id", id, "v", "VALID", totalDurationNanos = total, qualityGrade = "A", recordQualified = true, createdAtMillis = started, updatedAtMillis = started))
+            dao.insertEvaluation(SessionEvaluationEntity("e-$id", id, "v", "VALID", totalDurationNanos = total, qualityGrade = "A", recordQualified = true, timingEngineVersion = 2, createdAtMillis = started, updatedAtMillis = started))
             sectors.forEachIndexed { index, duration -> dao.insertEvaluationSector(EvaluationSectorEntity("e-$id", index, duration, recordQualified = true)) }
         }
         insert("best-s1", 100, listOf(10, 50, 40), now - 2_000)
@@ -240,7 +262,7 @@ class DeltaTDatabaseTest {
         )
         dao.insertSector(SectorResultEntity("old", 0, 20, null, null, null, "PURPLE", true))
         dao.insertSector(SectorResultEntity("new", 0, 30, null, null, null, "NEUTRAL", true))
-        dao.insertEvaluation(SessionEvaluationEntity("e-new", "new", "v2", "VALID", totalDurationNanos = 100, qualityGrade = "A", recordQualified = true, createdAtMillis = 2, updatedAtMillis = 2))
+        dao.insertEvaluation(SessionEvaluationEntity("e-new", "new", "v2", "VALID", totalDurationNanos = 100, qualityGrade = "A", recordQualified = true, timingEngineVersion = 2, createdAtMillis = 2, updatedAtMillis = 2))
         dao.insertEvaluationSector(EvaluationSectorEntity("e-new", 0, 30, recordQualified = true))
 
         assertEquals(30L, AppRepository(db).sectorBests("r").single().durationNanos)

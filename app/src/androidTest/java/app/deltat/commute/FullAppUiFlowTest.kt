@@ -75,8 +75,9 @@ class FullAppUiFlowTest {
 
         composeRule.onNodeWithText("纪录").performClick()
         composeRule.onNodeWithText("个人纪录").assertExists()
+        composeRule.onNodeWithText("全部").performClick()
         composeRule.onNodeWithText("P1").assertExists()
-        composeRule.onNodeWithText("全部历史有效成绩 · 从快到慢").assertExists()
+        composeRule.onNodeWithText("筛选范围 PB").assertExists()
 
         composeRule.onNodeWithText("设置").performClick()
         composeRule.onNodeWithText("锁屏继续计时检查").assertExists()
@@ -85,8 +86,8 @@ class FullAppUiFlowTest {
         composeRule.onNodeWithText("JSON 诊断包").assertExists()
         composeRule.onNodeWithText("CSV").assertExists()
         composeRule.saveScreenshot("settings-mock-export.png")
-        composeRule.onNodeWithTag("settings-list").performScrollToIndex(11)
-        composeRule.onNode(hasText("Delta T 0.4.0-test", substring = true)).assertExists()
+        composeRule.onNodeWithTag("settings-list").performScrollToIndex(10)
+        composeRule.onNode(hasText("Delta T 0.5.0-test", substring = true)).assertExists()
 
         composeRule.onNodeWithText("首页").performClick()
         composeRule.onNodeWithText("准备出发").assertExists()

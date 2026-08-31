@@ -241,9 +241,12 @@ class TimingService : Service() {
         repository.persistTransition(id, transition, benchmarks)
         if (transition.emittedEvents.any { it is EngineEvent.PassConfirmed }) vibrateCheckpoint()
 
-        val firstPass = engineState.passes.firstOrNull()?.elapsedRealtimeNanos
-        val currentSector = (engineState.passes.size - 1).coerceIn(0, 2)
-        var completedSectors = engineState.passes.zipWithNext().mapIndexed { index, (a, b) ->
+        val orderedPasses = engineState.passes.sortedBy { it.checkpoint.orderIndex }
+        val firstPass = orderedPasses.firstOrNull { it.checkpoint.orderIndex == 0 }?.elapsedRealtimeNanos
+        val currentSector = (engineState.nextCheckpointIndex - 1).coerceIn(0, 2)
+        var completedSectors = orderedPasses.zipWithNext().mapNotNull { (a, b) ->
+            if (a.checkpoint.orderIndex + 1 != b.checkpoint.orderIndex) return@mapNotNull null
+            val index = a.checkpoint.orderIndex
             val duration = b.elapsedRealtimeNanos - a.elapsedRealtimeNanos
             val month = benchmarks?.monthlySectorBestNanos?.getOrNull(index)
             val week = benchmarks?.weeklySectorBestNanos?.getOrNull(index)
@@ -281,7 +284,7 @@ class TimingService : Service() {
         val anyMatched = monthlyLive.matched || weeklyLive.matched
         var deltaConfidence = when {
             firstPass == null || (benchmarks?.monthlyTotal == null && benchmarks?.weeklyTotal == null) -> DeltaConfidence.UNAVAILABLE
-            justConfirmed && engineState.passes.size >= 2 -> DeltaConfidence.CONFIRMED
+            justConfirmed && orderedPasses.size >= 2 -> DeltaConfidence.CONFIRMED
             anyMatched -> DeltaConfidence.ESTIMATED
             monthlyLive.cumulativeDeltaNanos != null || weeklyLive.cumulativeDeltaNanos != null -> DeltaConfidence.HELD
             else -> DeltaConfidence.UNAVAILABLE
@@ -347,6 +350,8 @@ class TimingService : Service() {
                 lastFix = fix,
                 track = track,
                 actualPassElapsedNanos = engineState.passes.map { pass -> pass.elapsedRealtimeNanos },
+                actualPassOrderIndices = engineState.passes.map { pass -> pass.checkpoint.orderIndex },
+                missedCheckpointIndices = engineState.missedCheckpointIndices,
                 routeDetectionDistanceMeters = distanceToStart,
             )
         }
@@ -392,10 +397,11 @@ class TimingService : Service() {
         if (firstPass == null || reference == null) return LiveComparison(null, null, false)
         val referencePasses = reference.passes.map { it.passElapsedNanos }
         if (referencePasses.size != 4) return LiveComparison(null, null, false)
-        val confirmedPassIndex = engineState.passes.lastIndex
+        val confirmedPass = engineState.passes.maxByOrNull { it.checkpoint.orderIndex }
+        val confirmedPassIndex = confirmedPass?.checkpoint?.orderIndex ?: -1
         if (justConfirmed && confirmedPassIndex >= 1) {
             val expected = referencePasses[confirmedPassIndex] - referencePasses.first()
-            val delta = (engineState.passes.last().elapsedRealtimeNanos - firstPass) - expected
+            val delta = (requireNotNull(confirmedPass).elapsedRealtimeNanos - firstPass) - expected
             progress.expectedElapsedNanos = expected
             progress.lastCumulativeDeltaNanos = delta
             progress.lastSectorDeltaNanos = if (engineState.status == EngineStatus.COMPLETED) null else 0L
@@ -492,7 +498,7 @@ class TimingService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_delta_t_foreground)
             .setContentTitle(if (routeName.isBlank()) "Delta T · $status" else "$routeName · $sector")
-            .setContentText("${formatDuration(snapshot.elapsedNanos)}$delta · ${snapshot.gnssHealth.label}")
+            .setContentText("${formatDuration(snapshot.elapsedNanos)}$delta · ${snapshot.gnssHealth.displayLabel()}")
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

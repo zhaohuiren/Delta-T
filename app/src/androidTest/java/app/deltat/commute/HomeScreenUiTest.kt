@@ -57,7 +57,7 @@ class HomeScreenUiTest {
         }
         composeRule.onNodeWithText("一键准备").performClick()
         composeRule.runOnIdle { assertEquals(1, prepareClicks) }
-        assertTrue(composeRule.onAllNodesWithText("27:58.10").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(composeRule.onAllNodesWithText("28:42.70").fetchSemanticsNodes().isNotEmpty())
         val workY = composeRule.onNodeWithTag("home-route-work").fetchSemanticsNode().boundsInRoot.center.y
         val homeY = composeRule.onNodeWithTag("home-route-home").fetchSemanticsNode().boundsInRoot.center.y
         assertTrue("首页路线应为上班在上、下班在下", workY < homeY)
@@ -81,7 +81,7 @@ class HomeScreenUiTest {
     )
 
     private fun records(): List<SessionListRow> {
-        val monday = LocalDate.now().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val monday = LocalDate.now().withDayOfMonth(1)
         return listOf(
             row("best", monday, 27 * 60 + 58.1, 7),
             row("latest", monday, 28 * 60 + 42.7, 8),

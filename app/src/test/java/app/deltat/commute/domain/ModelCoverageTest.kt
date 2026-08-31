@@ -8,6 +8,9 @@ class ModelCoverageTest {
         val health = GnssHealth(10, 8, 12, 9, 5, 3, "GNSS 良好")
         assertEquals(8, health.usedGps)
         assertEquals("GNSS 良好", health.copy().label)
+        assertEquals("卫星 20/27", health.displayLabel())
+        assertEquals("卫星 0/0 · 正在搜星", GnssHealth().displayLabel())
+        assertEquals("定位已关闭", GnssHealth(locationEnabled = false).displayLabel())
         assertTrue(health.toString().contains("Beidou", ignoreCase = true))
 
         val fix = LocationFix(31.0, 121.0, 1, 2, 5.0, 10.0, 90.0, 2.0, "gps", false)

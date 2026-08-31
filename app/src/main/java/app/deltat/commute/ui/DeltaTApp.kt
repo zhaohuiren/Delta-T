@@ -67,7 +67,6 @@ import app.deltat.commute.domain.DeltaConfidence
 import app.deltat.commute.domain.DeltaReferenceType
 import app.deltat.commute.domain.LocationFix
 import app.deltat.commute.domain.ResultColor
-import app.deltat.commute.map.CheckpointMapPoint
 import app.deltat.commute.location.RuntimeBus
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
@@ -90,10 +89,7 @@ fun DeltaTApp(
     val sessions by viewModel.sessions.collectAsState()
     val leaderboard by viewModel.leaderboard.collectAsState()
     val runtime by RuntimeBus.state.collectAsState()
-    val routeDisplayMode by viewModel.routeDisplayMode.collectAsState()
-
-    CompositionLocalProvider(LocalRouteDisplayMode provides routeDisplayMode) {
-        Scaffold(
+    Scaffold(
             bottomBar = { BottomNavigation(nav) },
             containerColor = Background,
         ) { padding ->
@@ -157,7 +153,6 @@ fun DeltaTApp(
             composable("records") { TelemetryRecordsScreen(routes, sessions, leaderboard) { nav.navigate("detail/$it") } }
             composable("settings") { SettingsScreen(permissionGranted, withPermissions, viewModel, nav) }
             }
-        }
     }
 }
 
@@ -214,7 +209,11 @@ internal fun HomeScreen(
                 Text("Delta T", Modifier.weight(1f), fontSize = 25.sp, fontWeight = FontWeight.Bold)
                 Box(Modifier.size(8.dp).background(if (permissionGranted) Green else Yellow, RoundedCornerShape(50)))
                 Spacer(Modifier.width(8.dp))
-                Text(if (permissionGranted) "GNSS 良好" else "检查定位", color = if (permissionGranted) Green else Yellow, fontSize = 13.sp)
+                Text(
+                    if (permissionGranted) runtime.gnssHealth.displayLabel() else "定位已关闭",
+                    color = if (permissionGranted && runtime.gnssHealth.locationEnabled) Green else Yellow,
+                    fontSize = 13.sp,
+                )
             }
         }
         if (!permissionGranted) item {
@@ -487,7 +486,7 @@ internal fun BaselineScreen(nav: NavController, route: RouteProfileEntity?, runt
         PageHeader("录制路线", nav)
         Column(Modifier.fillMaxSize().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text(route?.name ?: "路线", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            StatusPill(if (active) runtime.gnssHealth.label else "准备开始", if (active && runtime.lastFix?.accuracyMeters ?: 999.0 <= 25) Green else Yellow)
+            StatusPill(if (active) runtime.gnssHealth.displayLabel() else "准备开始", if (active && runtime.lastFix?.accuracyMeters ?: 999.0 <= 25) Green else Yellow)
             AbstractRoute(runtime.track.map { it.latitude to it.longitude }, Modifier.fillMaxWidth().weight(1f))
             Text(if (active) "正在记录完整轨迹 · ${formatDuration(runtime.elapsedNanos)}" else "出发前点击开始；驾驶过程中无需操作，到达并停车后再结束。", color = Muted)
             if (!active && runtime.status == "路线轨迹已录制" && runtime.sessionId != null) {
@@ -567,23 +566,6 @@ private fun CheckpointEditor(nav: NavController, viewModel: AppViewModel, sessio
             activeJob?.takeIf { it.status == "FAILED" }?.let { failed ->
                 OutlinedButton(onClick = { viewModel.retryRecalculation(failed.id) { error = it } }, modifier = Modifier.fillMaxWidth()) {
                     Text("重算失败，保留旧计时点 · 点击重试")
-                }
-            }
-            if (LocalRouteDisplayMode.current == RouteDisplayMode.MAP && RouteMapAvailability.available && track.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text("高德地图预览 · 计时点编辑仍使用下方原始 WGS84 轨迹", color = Muted, fontSize = 12.sp)
-                    RealRouteMap(
-                        points = track.map { it.latitude to it.longitude },
-                        checkpoints = checkpoints.sortedBy { it.orderIndex }.map { checkpoint ->
-                            CheckpointMapPoint(
-                                label = checkpoint.label,
-                                latitude = checkpoint.latitude,
-                                longitude = checkpoint.longitude,
-                                radiusMeters = checkpoint.radiusMeters,
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth().height(150.dp),
-                    )
                 }
             }
             ZoomableCheckpointEditor(
@@ -718,7 +700,7 @@ internal fun TimingScreen(
         PageHeader(if (completed) "COMPLETE" else if (runtime.mode == "AUTO_ARMING") "AUTO ROUTE" else "${route?.name ?: "计时"} · LIVE", nav)
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                StatusPill(runtime.gnssHealth.label, if (runtime.gnssHealth.usedGps + runtime.gnssHealth.usedBeidou >= 4) Green else Yellow)
+                StatusPill(runtime.gnssHealth.displayLabel(), if (runtime.gnssHealth.usedTotal >= 4) Green else Yellow)
             }
             F1TimingBoard(runtime, route?.name ?: runtime.routeName.ifBlank { "计时" }, completed, displayElapsedNanos)
             TelemetryPanel(Modifier.fillMaxWidth()) {
@@ -942,7 +924,7 @@ private fun DetectingRouteScreen(nav: NavController, runtime: app.deltat.commute
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
-                StatusPill(runtime.gnssHealth.label, if (runtime.gnssHealth.usedGps + runtime.gnssHealth.usedBeidou >= 4) Green else Yellow)
+                StatusPill(runtime.gnssHealth.displayLabel(), if (runtime.gnssHealth.usedTotal >= 4) Green else Yellow)
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     CircularProgressIndicator(color = RacingRed)
                     TelemetryLabel("AUTO ROUTE", RacingRed)
@@ -971,7 +953,7 @@ private fun WaitingAtStartScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    StatusPill(runtime.gnssHealth.label, if (runtime.gnssHealth.usedGps + runtime.gnssHealth.usedBeidou >= 4) Green else Yellow)
+                    StatusPill(runtime.gnssHealth.displayLabel(), if (runtime.gnssHealth.usedTotal >= 4) Green else Yellow)
                     Spacer(Modifier.weight(1f))
                     TelemetryLabel("WAITING A", RacingRed)
                 }
@@ -1102,8 +1084,9 @@ private fun SessionDetail(nav: NavController, viewModel: AppViewModel, sessionId
     val displayTotal = displayedEvaluation?.totalDurationNanos ?: if (showOriginal) originalSession?.totalDurationNanos else session?.totalDurationNanos
     val displayMonthlyDelta = displayedEvaluation?.monthlyDeltaNanos ?: if (showOriginal) originalSession?.monthlyDeltaNanos else session?.monthlyDeltaNanos
     val displayWeeklyDelta = displayedEvaluation?.weeklyDeltaNanos ?: if (showOriginal) originalSession?.weeklyDeltaNanos else session?.weeklyDeltaNanos
-    val displayColorName: String = displayedEvaluation?.totalResultColor ?: (if (showOriginal) originalSession?.totalResultColor else session?.totalResultColor) ?: "NEUTRAL"
     val displayQuality: String = displayedEvaluation?.qualityGrade ?: (if (showOriginal) originalSession?.qualityGrade else session?.qualityGrade) ?: "C"
+    val displayMissingMask = displayedEvaluation?.missingCheckpointMask
+        ?: if (showOriginal) originalSession?.missingCheckpointMask ?: 0 else session?.missingCheckpointMask ?: 0
     val displayValidity = if (displayedEvaluation != null) if (displayedEvaluation.status == "VALID") "VALID" else "INVALID" else if (showOriginal) originalSession?.validity ?: "PENDING" else session?.validity ?: "PENDING"
     val currentRoute = routes.firstOrNull { it.id == session?.routeProfileId }
     val activeVersionForSession = currentRoute?.activeCheckpointVersionId
@@ -1159,6 +1142,10 @@ private fun SessionDetail(nav: NavController, viewModel: AppViewModel, sessionId
                     color = if (showOriginal || legacyOldWithoutEvaluation) Yellow else Muted,
                     fontSize = 12.sp,
                 )
+                if (displayMissingMask != 0) {
+                    val missing = (1..2).filter { displayMissingMask and (1 shl it) != 0 }.joinToString("、") { "S$it" }
+                    Text("总程有效 · 缺失 $missing，相邻分段显示 --", color = Yellow, fontSize = 12.sp)
+                }
                 val failedEvaluation = displayedEvaluation?.takeIf { !showOriginal && it.status != "VALID" }
                 if (failedEvaluation != null) {
                     Text(failedEvaluation.failureReason ?: "无法按当前计时点重算", color = Yellow, fontSize = 12.sp)
@@ -1178,7 +1165,7 @@ private fun SessionDetail(nav: NavController, viewModel: AppViewModel, sessionId
                 Card(colors = CardDefaults.cardColors(containerColor = Surface)) {
                     Column(Modifier.padding(16.dp)) {
                         (0..2).forEach { index ->
-                            val sector = sectors.getOrNull(index)
+                            val sector = sectors.firstOrNull { it.sectorIndex == index }
                             Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Text("S${index + 1}", Modifier.width(44.dp))
                                 Text(sector?.durationNanos?.let(::formatDuration) ?: "--", Modifier.weight(1f), fontFamily = FontFamily.Monospace)
@@ -1217,29 +1204,10 @@ private fun SessionDetail(nav: NavController, viewModel: AppViewModel, sessionId
 @Composable
 private fun SettingsScreen(permissionGranted: Boolean, withPermissions: (() -> Unit) -> Unit, viewModel: AppViewModel, nav: NavController) {
     val context = LocalContext.current
-    val routeDisplayMode = LocalRouteDisplayMode.current
-    val amapPrivacyAgreed by viewModel.amapPrivacyAgreed.collectAsState()
     val scope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
     var deviceRevision by remember { mutableIntStateOf(0) }
     var pendingContent by remember { mutableStateOf("") }
-    var showMapPrivacyDialog by remember { mutableStateOf(false) }
-    if (showMapPrivacyDialog) {
-        AlertDialog(
-            onDismissRequest = { showMapPrivacyDialog = false },
-            title = { Text("启用高德地图？") },
-            text = {
-                Text("地图模式会初始化高德地图 SDK，并通过网络请求地图底图数据。你的完整通勤轨迹仍保存在本机；高德地图服务可能会处理必要的设备和网络信息。只有在你同意后才会加载地图。")
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showMapPrivacyDialog = false
-                    viewModel.agreeToAmapPrivacyAndEnableMap()
-                }) { Text("同意并启用") }
-            },
-            dismissButton = { TextButton(onClick = { showMapPrivacyDialog = false }) { Text("继续使用简洁模式") } },
-        )
-    }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) deviceRevision++
@@ -1332,44 +1300,6 @@ private fun SettingsScreen(permissionGranted: Boolean, withPermissions: (() -> U
                     }
                 }
             }
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = Surface)) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Map, null, tint = if (viewModel.mapAvailable) Green else Muted)
-                            Column(Modifier.padding(start = 14.dp)) {
-                                Text("轨迹显示", fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    when {
-                                        !viewModel.mapAvailable -> "当前构建不包含高德地图"
-                                        amapPrivacyAgreed -> "高德地图已接入 · 选择会自动保存"
-                                        else -> "高德地图已接入 · 首次启用需要你同意"
-                                    },
-                                    color = if (viewModel.mapAvailable) Green else Muted,
-                                    fontSize = 13.sp,
-                                )
-                            }
-                        }
-                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                            SegmentedButton(
-                                selected = routeDisplayMode == RouteDisplayMode.SIMPLE,
-                                onClick = { viewModel.setRouteDisplayMode(RouteDisplayMode.SIMPLE) },
-                                shape = SegmentedButtonDefaults.itemShape(0, 2),
-                            ) { Text("简洁模式") }
-                            SegmentedButton(
-                                selected = routeDisplayMode == RouteDisplayMode.MAP,
-                                onClick = {
-                                    if (amapPrivacyAgreed) viewModel.setRouteDisplayMode(RouteDisplayMode.MAP)
-                                    else showMapPrivacyDialog = true
-                                },
-                                enabled = viewModel.mapAvailable,
-                                shape = SegmentedButtonDefaults.itemShape(1, 2),
-                            ) { Text("地图模式") }
-                        }
-                        Text("地图模式会在路线录制、实时计时和历史详情中显示真实道路底图。", color = Muted, fontSize = 12.sp)
-                    }
-                }
-            }
             item { Text("Delta T ${BuildConfig.VERSION_NAME}\n个人侧载测试版 · ${BuildConfig.APPLICATION_ID}", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(8.dp)) }
         }
     }
@@ -1409,10 +1339,6 @@ fun AbstractRoute(
     referencePoints: List<Pair<Double, Double>> = emptyList(),
 ) {
     val hasTrack = points.size >= 2 || referencePoints.size >= 2
-    if (LocalRouteDisplayMode.current == RouteDisplayMode.MAP && RouteMapAvailability.available && (points.isNotEmpty() || referencePoints.isNotEmpty())) {
-        RealRouteMap(points = points, referencePoints = referencePoints, modifier = modifier)
-        return
-    }
     Box(
         modifier = modifier.background(Color(0xFF0A0F12), RoundedCornerShape(14.dp)),
         contentAlignment = Alignment.Center,

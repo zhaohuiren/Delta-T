@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.deltat.commute.data.TrackPointEntity
 import app.deltat.commute.data.CheckpointEntity
+import app.deltat.commute.domain.Checkpoint
 import app.deltat.commute.domain.CheckpointSelection
 import app.deltat.commute.domain.Geometry
 import app.deltat.commute.domain.LocationFix
@@ -70,14 +71,6 @@ fun TelemetryRoute(
     sectorColors: List<ResultColor> = emptyList(),
 ) {
     val all = referencePoints + points
-    if (LocalRouteDisplayMode.current == RouteDisplayMode.MAP && RouteMapAvailability.available && all.isNotEmpty()) {
-        RealRouteMap(
-            points = points.map { it.latitude to it.longitude },
-            referencePoints = referencePoints.map { it.latitude to it.longitude },
-            modifier = modifier,
-        )
-        return
-    }
     Box(modifier.background(Color(0xFF090C0F), CutCornerShape(topEnd = 14.dp)), contentAlignment = Alignment.Center) {
         if (all.size < 2) {
             Text("尚无轨迹", color = Muted, fontSize = 13.sp)
@@ -364,7 +357,10 @@ private fun nudgeByMeters(track: List<TrackPointEntity>, positions: List<Double>
 private fun validateCheckpointPositions(track: List<TrackPointEntity>, positions: List<Double>): String? {
     if (positions.size != 4 || positions.zipWithNext().any { it.first >= it.second }) return "计时点必须按 A、S1、S2、B 排列"
     val points = positions.map { pos -> track[pos.roundToInt().coerceIn(0, track.lastIndex)] }
-    if (points.zipWithNext().any { (a, b) -> Geometry.distanceMeters(a.latitude, a.longitude, b.latitude, b.longitude) < 70.0 }) return "相邻计时点至少需要间隔 70 米"
+    val bearing = Geometry.bearingDegrees(points.first().latitude, points.first().longitude, points.last().latitude, points.last().longitude)
+    val origin = Checkpoint("axis", 0, "A", points.first().latitude, points.first().longitude)
+    val projections = points.map { Geometry.signedProgressMeters(it.latitude, it.longitude, origin, bearing) }
+    if (projections.zipWithNext().any { (a, b) -> b - a < 100.0 }) return "相邻进度线至少需要间隔 100 米"
     return null
 }
 

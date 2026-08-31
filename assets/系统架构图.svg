@@ -27,7 +27,7 @@
   <text class="h" x="340" y="548">Pure Kotlin Domain（核心真相）</text>
   <text class="t" x="340" y="595">TimingEngine　CheckpointDetector　LocationQualityEvaluator</text>
   <text class="t" x="340" y="635">Geometry / Interpolation　RecordJudge　TrackProjector / Simplifier</text>
-  <text class="small" x="340" y="670">不依赖 Android UI、Room、高德 SDK；使用模拟轨迹做确定性测试</text>
+  <text class="small" x="340" y="670">不依赖 Android UI、Room；使用模拟轨迹做确定性测试</text>
 
   <rect class="platform" x="80" y="760" width="680" height="150" rx="18"/>
   <text class="h" x="115" y="808">Android Platform</text>

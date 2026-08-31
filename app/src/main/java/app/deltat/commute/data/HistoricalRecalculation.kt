@@ -9,6 +9,7 @@ import app.deltat.commute.domain.EngineState
 import app.deltat.commute.domain.EngineStatus
 import app.deltat.commute.domain.Geometry
 import app.deltat.commute.domain.LocationFix
+import app.deltat.commute.domain.LegacyTimingEngine
 import app.deltat.commute.domain.QualityGrade
 import app.deltat.commute.domain.RecordJudge
 import app.deltat.commute.domain.ResultColor
@@ -180,7 +181,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
         val track = dao.track(session.id)
         if (track.size < 4) return ReplayResult.Failure("没有完整历史轨迹")
         if (session.isMockDetected || track.any { it.isMock }) return ReplayResult.Failure("历史轨迹包含模拟定位", "LOW_QUALITY")
-        val engine = DefaultTimingEngine()
+        val engine = LegacyTimingEngine()
         var state = EngineState()
         track.forEach { point ->
             if (state.status == EngineStatus.COMPLETED) return@forEach
@@ -347,8 +348,16 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
             )
         }
         require(positions.zipWithNext().all { it.first.pathPosition < it.second.pathPosition }) { "计时点必须沿轨迹按 A、S1、S2、B 排列" }
-        require(positions.zipWithNext().all { (a, b) -> Geometry.distanceMeters(a.latitude, a.longitude, b.latitude, b.longitude) >= 70.0 }) {
-            "相邻计时点至少需要间隔 70 米"
+        val routeBearing = Geometry.bearingDegrees(
+            positions.first().latitude, positions.first().longitude,
+            positions.last().latitude, positions.last().longitude,
+        )
+        val projectionOrigin = Checkpoint("axis", 0, "A", positions.first().latitude, positions.first().longitude)
+        val projections = positions.map { point ->
+            Geometry.signedProgressMeters(point.latitude, point.longitude, projectionOrigin, routeBearing)
+        }
+        require(projections.zipWithNext().all { (a, b) -> b - a >= 100.0 }) {
+            "计时点沿 A→B 方向必须依次排列，且相邻进度线至少间隔 100 米"
         }
         val labels = listOf("A", "S1", "S2", "B")
         val draftVersion = "preview"
@@ -361,7 +370,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                 latitude = point.latitude,
                 longitude = point.longitude,
                 radiusMeters = radiusMeters.coerceIn(20.0, 80.0),
-                preferredBearing = point.preferredBearing,
+                preferredBearing = routeBearing,
                 bearingTolerance = 100.0,
                 gateHalfWidthMeters = maxOf(radiusMeters, 50.0),
                 sourceTrackPointId = point.sourcePointId,

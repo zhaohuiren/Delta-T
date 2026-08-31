@@ -134,6 +134,8 @@ class AppRepository(private val database: DeltaTDatabase) {
                 monthlyDeltaNanos = evaluation.monthlyDeltaNanos,
                 weeklyDeltaNanos = evaluation.weeklyDeltaNanos,
                 totalResultColor = evaluation.totalResultColor,
+                missingCheckpointMask = evaluation.missingCheckpointMask,
+                timingEngineVersion = evaluation.timingEngineVersion,
             )
             val passes = dao.evaluationPasses(evaluation.id).map { pass ->
                 CheckpointPassEntity(
@@ -160,7 +162,9 @@ class AppRepository(private val database: DeltaTDatabase) {
         suspend fun reference(fromMillis: Long, type: DeltaReferenceType): ReferenceRunData? =
             candidates(fromMillis).firstOrNull()?.let { referenceData(it, type) }
         suspend fun sectorReferences(fromMillis: Long, type: DeltaReferenceType): List<ReferenceRunData?> {
-            val evaluations = candidates(fromMillis)
+            val evaluations = candidates(fromMillis).filter {
+                it.timingEngineVersion == DefaultTimingEngine.TIMING_ENGINE_VERSION
+            }
             val sectorRows = evaluations.associateWith { dao.evaluationSectors(it.id) }
             val startedBySession = evaluations.associate { evaluation ->
                 evaluation.sessionId to (dao.session(evaluation.sessionId)?.startedWallTimeMillis ?: Long.MAX_VALUE)
@@ -209,6 +213,7 @@ class AppRepository(private val database: DeltaTDatabase) {
             appVersion = BuildConfig.VERSION_NAME,
             deviceModel = Build.MODEL,
             androidVersion = Build.VERSION.RELEASE,
+            timingEngineVersion = DefaultTimingEngine.TIMING_ENGINE_VERSION,
             createdAtMillis = System.currentTimeMillis(),
         )
         dao.insertSession(session)
@@ -280,11 +285,16 @@ class AppRepository(private val database: DeltaTDatabase) {
                     interpolatedLatitude = pass.latitude, interpolatedLongitude = pass.longitude,
                     triggerMode = pass.triggerMode.name, closestDistanceMeters = pass.closestDistanceMeters,
                     estimatedUncertaintyMillis = pass.uncertaintyMillis,
-                    confidence = if (pass.triggerMode == TriggerMode.LINE_CROSSING) "A" else "B",
+                    confidence = if (pass.triggerMode in setOf(TriggerMode.LINE_CROSSING, TriggerMode.PROGRESS_LINE)) "A" else "B",
                 ),
             )
         }
-        dao.updateSession(session.copy(status = transition.newState.status.name))
+        dao.updateSession(
+            session.copy(
+                status = transition.newState.status.name,
+                missingCheckpointMask = transition.newState.missedCheckpointIndices.fold(0) { mask, index -> mask or (1 shl index) },
+            ),
+        )
         if (transition.newState.status == EngineStatus.COMPLETED) finalizeTimedSession(sessionId, transition.newState, benchmarks)
     }
 
@@ -300,7 +310,11 @@ class AppRepository(private val database: DeltaTDatabase) {
             state.rejectedFixes > 10 -> QualityGrade.B
             else -> QualityGrade.A
         }
-        state.passes.zipWithNext().forEachIndexed { index, (a, b) ->
+        val orderedPasses = state.passes.sortedBy { it.checkpoint.orderIndex }
+        orderedPasses.zipWithNext()
+            .filter { (a, b) -> a.checkpoint.orderIndex + 1 == b.checkpoint.orderIndex }
+            .forEach { (a, b) ->
+            val index = a.checkpoint.orderIndex
             val duration = b.elapsedRealtimeNanos - a.elapsedRealtimeNanos
             val monthlyBest = benchmarks.monthlySectorBestNanos.getOrNull(index)
             val weeklyBest = benchmarks.weeklySectorBestNanos.getOrNull(index)
@@ -336,8 +350,8 @@ class AppRepository(private val database: DeltaTDatabase) {
                 ),
             )
         }
-        val start = state.passes.first().elapsedRealtimeNanos
-        val finish = state.passes.last().elapsedRealtimeNanos
+        val start = requireNotNull(orderedPasses.firstOrNull { it.checkpoint.orderIndex == 0 }).elapsedRealtimeNanos
+        val finish = requireNotNull(orderedPasses.firstOrNull { it.checkpoint.orderIndex == 3 }).elapsedRealtimeNanos
         val total = finish - start
         val uncertainty = state.passes.maxOfOrNull { it.uncertaintyMillis } ?: 500L
         val monthlyBest = benchmarks.monthlyTotal?.session?.totalDurationNanos
@@ -362,6 +376,8 @@ class AppRepository(private val database: DeltaTDatabase) {
                 monthlyDeltaNanos = monthlyBest?.let { total - it },
                 weeklyDeltaNanos = weeklyBest?.let { total - it },
                 totalResultColor = totalColor.name,
+                timingEngineVersion = DefaultTimingEngine.TIMING_ENGINE_VERSION,
+                missingCheckpointMask = state.missedCheckpointIndices.fold(0) { mask, index -> mask or (1 shl index) },
                 createdAtMillis = now,
                 updatedAtMillis = now,
             ),
@@ -374,7 +390,7 @@ class AppRepository(private val database: DeltaTDatabase) {
                     interpolatedLatitude = pass.latitude, interpolatedLongitude = pass.longitude,
                     triggerMode = pass.triggerMode.name, closestDistanceMeters = pass.closestDistanceMeters,
                     estimatedUncertaintyMillis = pass.uncertaintyMillis,
-                    confidence = if (pass.triggerMode == TriggerMode.LINE_CROSSING) "A" else "B",
+                    confidence = if (pass.triggerMode in setOf(TriggerMode.LINE_CROSSING, TriggerMode.PROGRESS_LINE)) "A" else "B",
                 ),
             )
         }
@@ -391,6 +407,8 @@ class AppRepository(private val database: DeltaTDatabase) {
                 weeklyDeltaNanos = weeklyBest?.let { total - it },
                 totalResultColor = totalColor.name,
                 comparisonRulesVersion = 3,
+                missingCheckpointMask = state.missedCheckpointIndices.fold(0) { mask, index -> mask or (1 shl index) },
+                timingEngineVersion = DefaultTimingEngine.TIMING_ENGINE_VERSION,
             ),
         )
     }
@@ -488,6 +506,8 @@ class AppRepository(private val database: DeltaTDatabase) {
                 totalDurationNanos = evaluation.totalDurationNanos,
                 validity = "VALID",
                 qualityGrade = evaluation.qualityGrade,
+                missingCheckpointMask = evaluation.missingCheckpointMask,
+                timingEngineVersion = evaluation.timingEngineVersion,
             )
         }
     }
@@ -543,6 +563,8 @@ class AppRepository(private val database: DeltaTDatabase) {
                     .append(",\"maxSpeedMps\":").append(row.maxSpeedMps ?: "null")
                     .append(",\"maxSpeedElapsedNanos\":").append(row.maxSpeedElapsedNanos ?: "null")
                     .append(",\"maxSpeedWallTimeMillis\":").append(row.maxSpeedWallTimeMillis ?: "null")
+                    .append(",\"missingCheckpointMask\":").append(row.missingCheckpointMask)
+                    .append(",\"timingEngineVersion\":").append(row.timingEngineVersion)
                 append(",\"track\":[")
                 dao.track(row.id).forEachIndexed { pointIndex, point ->
                     if (pointIndex > 0) append(',')
@@ -575,6 +597,7 @@ class AppRepository(private val database: DeltaTDatabase) {
                         .append(",\"weeklyDeltaNanos\":").append(evaluation.weeklyDeltaNanos ?: "null")
                         .append(",\"color\":\"").append(evaluation.totalResultColor)
                         .append("\",\"timingEngineVersion\":").append(evaluation.timingEngineVersion)
+                        .append(",\"missingCheckpointMask\":").append(evaluation.missingCheckpointMask)
                     append(",\"passes\":[")
                     dao.evaluationPasses(evaluation.id).forEachIndexed { passIndex, pass ->
                         if (passIndex > 0) append(',')

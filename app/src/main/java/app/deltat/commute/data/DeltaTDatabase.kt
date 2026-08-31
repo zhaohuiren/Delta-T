@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SessionEvaluationEntity::class, EvaluationPassEntity::class,
         EvaluationSectorEntity::class, CheckpointRecalculationJobEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class DeltaTDatabase : RoomDatabase() {
@@ -26,7 +26,7 @@ abstract class DeltaTDatabase : RoomDatabase() {
             context,
             DeltaTDatabase::class.java,
             "delta-t.db",
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -173,6 +173,14 @@ abstract class DeltaTDatabase : RoomDatabase() {
                     FROM sector_results s
                     JOIN session_evaluations e ON e.id = 'legacy-' || s.sessionId
                 """.trimIndent())
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN missingCheckpointMask INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE sessions ADD COLUMN timingEngineVersion INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE session_evaluations ADD COLUMN missingCheckpointMask INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

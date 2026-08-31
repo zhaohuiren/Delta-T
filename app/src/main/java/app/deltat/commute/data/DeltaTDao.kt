@@ -167,6 +167,8 @@ interface DeltaTDao {
                COALESCE(e.totalResultColor, s.totalResultColor) AS totalResultColor,
                e.id AS evaluationId, e.status AS evaluationStatus, e.failureReason AS evaluationFailureReason,
                e.createdAtMillis AS evaluationCreatedAtMillis, e.timingEngineVersion AS evaluationEngineVersion,
+               COALESCE(e.missingCheckpointMask, s.missingCheckpointMask) AS missingCheckpointMask,
+               COALESCE(e.timingEngineVersion, s.timingEngineVersion) AS timingEngineVersion,
                CASE WHEN r.referenceSessionId = s.id THEN 1 ELSE 0 END AS isCurrentReference
         FROM sessions s JOIN route_profiles r ON r.id = s.routeProfileId
         LEFT JOIN session_evaluations e ON e.sessionId = s.id AND e.checkpointVersionId = r.activeCheckpointVersionId
@@ -180,7 +182,8 @@ interface DeltaTDao {
                e.qualityGrade,
                MAX(CASE WHEN es.sectorIndex = 0 THEN es.durationNanos END) AS sector1Nanos,
                MAX(CASE WHEN es.sectorIndex = 1 THEN es.durationNanos END) AS sector2Nanos,
-               MAX(CASE WHEN es.sectorIndex = 2 THEN es.durationNanos END) AS sector3Nanos
+               MAX(CASE WHEN es.sectorIndex = 2 THEN es.durationNanos END) AS sector3Nanos,
+               e.timingEngineVersion, e.missingCheckpointMask
         FROM session_evaluations e
         JOIN sessions s ON s.id = e.sessionId
         JOIN route_profiles r ON r.id = s.routeProfileId
@@ -211,6 +214,8 @@ interface DeltaTDao {
                COALESCE(e.totalResultColor, s.totalResultColor) AS totalResultColor,
                e.id AS evaluationId, e.status AS evaluationStatus, e.failureReason AS evaluationFailureReason,
                e.createdAtMillis AS evaluationCreatedAtMillis, e.timingEngineVersion AS evaluationEngineVersion,
+               COALESCE(e.missingCheckpointMask, s.missingCheckpointMask) AS missingCheckpointMask,
+               COALESCE(e.timingEngineVersion, s.timingEngineVersion) AS timingEngineVersion,
                CASE WHEN r.referenceSessionId = s.id THEN 1 ELSE 0 END AS isCurrentReference
         FROM sessions s JOIN route_profiles r ON r.id = s.routeProfileId
         LEFT JOIN session_evaluations e ON e.sessionId = s.id AND e.checkpointVersionId = r.activeCheckpointVersionId
@@ -248,10 +253,10 @@ interface DeltaTDao {
     @Query("SELECT e.* FROM session_evaluations e JOIN sessions s ON s.id = e.sessionId WHERE s.routeProfileId = :routeId AND e.checkpointVersionId = :versionId AND e.status = 'VALID' AND e.recordQualified = 1 AND e.totalDurationNanos IS NOT NULL AND s.startedWallTimeMillis >= :fromMillis AND s.startedWallTimeMillis < :toMillis ORDER BY e.totalDurationNanos ASC")
     suspend fun validEvaluationsInPeriod(routeId: String, versionId: String, fromMillis: Long, toMillis: Long): List<SessionEvaluationEntity>
 
-    @Query("SELECT es.sectorIndex AS sectorIndex, MIN(es.durationNanos) AS durationNanos FROM evaluation_sectors es JOIN session_evaluations e ON e.id = es.evaluationId JOIN sessions s ON s.id = e.sessionId WHERE s.routeProfileId = :routeId AND e.checkpointVersionId = :versionId AND e.status = 'VALID' AND e.recordQualified = 1 GROUP BY es.sectorIndex ORDER BY es.sectorIndex")
+    @Query("SELECT es.sectorIndex AS sectorIndex, MIN(es.durationNanos) AS durationNanos FROM evaluation_sectors es JOIN session_evaluations e ON e.id = es.evaluationId JOIN sessions s ON s.id = e.sessionId WHERE s.routeProfileId = :routeId AND e.checkpointVersionId = :versionId AND e.status = 'VALID' AND e.recordQualified = 1 AND e.timingEngineVersion = 2 GROUP BY es.sectorIndex ORDER BY es.sectorIndex")
     suspend fun evaluationSectorBests(routeId: String, versionId: String): List<SectorBestRow>
 
-    @Query("SELECT es.sectorIndex AS sectorIndex, MIN(es.durationNanos) AS durationNanos FROM evaluation_sectors es JOIN session_evaluations e ON e.id = es.evaluationId JOIN sessions s ON s.id = e.sessionId WHERE s.routeProfileId = :routeId AND e.checkpointVersionId = :versionId AND e.status = 'VALID' AND e.recordQualified = 1 AND s.startedWallTimeMillis >= :fromMillis AND s.startedWallTimeMillis < :toMillis GROUP BY es.sectorIndex ORDER BY es.sectorIndex")
+    @Query("SELECT es.sectorIndex AS sectorIndex, MIN(es.durationNanos) AS durationNanos FROM evaluation_sectors es JOIN session_evaluations e ON e.id = es.evaluationId JOIN sessions s ON s.id = e.sessionId WHERE s.routeProfileId = :routeId AND e.checkpointVersionId = :versionId AND e.status = 'VALID' AND e.recordQualified = 1 AND e.timingEngineVersion = 2 AND s.startedWallTimeMillis >= :fromMillis AND s.startedWallTimeMillis < :toMillis GROUP BY es.sectorIndex ORDER BY es.sectorIndex")
     suspend fun evaluationSectorBestsInPeriod(routeId: String, versionId: String, fromMillis: Long, toMillis: Long): List<SectorBestRow>
 
     @Query("SELECT e.* FROM session_evaluations e JOIN sessions s ON s.id = e.sessionId WHERE s.routeProfileId = :routeId AND e.checkpointVersionId = :versionId ORDER BY s.startedWallTimeMillis ASC, s.createdAtMillis ASC, s.id ASC")

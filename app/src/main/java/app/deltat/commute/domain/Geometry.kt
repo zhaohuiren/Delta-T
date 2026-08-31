@@ -33,6 +33,32 @@ object Geometry {
 
     data class Crossing(val ratio: Double, val crossTrackMeters: Double)
 
+    fun signedProgressMeters(latitude: Double, longitude: Double, checkpoint: Checkpoint, routeBearing: Double): Double {
+        val (x, y) = toLocalMeters(latitude, longitude, checkpoint.latitude, checkpoint.longitude)
+        val radians = Math.toRadians(routeBearing)
+        return x * sin(radians) + y * cos(radians)
+    }
+
+    fun progressLineCrossing(
+        previous: LocationFix,
+        current: LocationFix,
+        checkpoint: Checkpoint,
+        routeBearing: Double,
+    ): Crossing? {
+        val previousProgress = signedProgressMeters(previous.latitude, previous.longitude, checkpoint, routeBearing)
+        val currentProgress = signedProgressMeters(current.latitude, current.longitude, checkpoint, routeBearing)
+        if (previousProgress > 0.0 || currentProgress < 0.0 || currentProgress == previousProgress) return null
+        val ratio = (-previousProgress / (currentProgress - previousProgress)).coerceIn(0.0, 1.0)
+        val (px, py) = toLocalMeters(previous.latitude, previous.longitude, checkpoint.latitude, checkpoint.longitude)
+        val (cx, cy) = toLocalMeters(current.latitude, current.longitude, checkpoint.latitude, checkpoint.longitude)
+        val radians = Math.toRadians(routeBearing)
+        val dirX = sin(radians)
+        val dirY = cos(radians)
+        val ix = px + ratio * (cx - px)
+        val iy = py + ratio * (cy - py)
+        return Crossing(ratio, abs(ix * -dirY + iy * dirX))
+    }
+
     fun crossing(
         previous: LocationFix,
         current: LocationFix,

@@ -5,7 +5,6 @@ import android.content.Intent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import app.deltat.commute.BuildConfig
 import app.deltat.commute.DeltaTApplication
 import app.deltat.commute.data.AppRepository
 import app.deltat.commute.data.RouteProfileEntity
@@ -18,44 +17,16 @@ import app.deltat.commute.location.RuntimeBus
 import app.deltat.commute.domain.CheckpointSelection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
-    private val displayPreferences = application.getSharedPreferences("display_preferences", Application.MODE_PRIVATE)
-    private val privacyAgreedAtStartup = displayPreferences.getBoolean("amap_privacy_agreed", false)
-    private val _amapPrivacyAgreed = MutableStateFlow(privacyAgreedAtStartup)
-    val amapPrivacyAgreed: StateFlow<Boolean> = _amapPrivacyAgreed.asStateFlow()
-    private val _routeDisplayMode = MutableStateFlow(
-        RouteDisplayMode.fromStorage(displayPreferences.getString("route_display_mode", null))
-            .takeIf { it != RouteDisplayMode.MAP || privacyAgreedAtStartup } ?: RouteDisplayMode.SIMPLE,
-    )
-    val routeDisplayMode: StateFlow<RouteDisplayMode> = _routeDisplayMode.asStateFlow()
-    val mapAvailable: Boolean = BuildConfig.AMAP_AVAILABLE && BuildConfig.AMAP_API_KEY.isNotBlank()
     val repository: AppRepository = (application as DeltaTApplication).repository
     val routes: StateFlow<List<RouteProfileEntity>> = repository.routes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val sessions: StateFlow<List<SessionListRow>> = repository.sessions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val leaderboard: StateFlow<List<LeaderboardRow>> = repository.leaderboard.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    fun setRouteDisplayMode(mode: RouteDisplayMode) {
-        val effectiveMode = if (mode == RouteDisplayMode.MAP && (!mapAvailable || !_amapPrivacyAgreed.value)) RouteDisplayMode.SIMPLE else mode
-        _routeDisplayMode.value = effectiveMode
-        displayPreferences.edit().putString("route_display_mode", effectiveMode.storageValue).apply()
-    }
-
-    fun agreeToAmapPrivacyAndEnableMap() {
-        if (!mapAvailable) return
-        _amapPrivacyAgreed.value = true
-        _routeDisplayMode.value = RouteDisplayMode.MAP
-        displayPreferences.edit()
-            .putBoolean("amap_privacy_agreed", true)
-            .putString("route_display_mode", RouteDisplayMode.MAP.storageValue)
-            .apply()
-    }
 
     fun createRoute(name: String, onCreated: (String) -> Unit) = viewModelScope.launch {
         onCreated(repository.createRoute(name))

@@ -31,7 +31,7 @@ enum class EngineStatus {
     COMPLETED, CANCELLED, INTERRUPTED, INCOMPLETE,
 }
 
-enum class TriggerMode { LINE_CROSSING, CLOSEST_APPROACH, MANUAL_REVIEW }
+enum class TriggerMode { LINE_CROSSING, PROGRESS_LINE, CLOSEST_APPROACH, MANUAL_REVIEW }
 enum class QualityGrade { A, B, C }
 enum class ResultColor { PURPLE, GREEN, YELLOW, NEUTRAL }
 enum class PeriodComparisonStatus { FASTER, SLOWER, TIED, UNAVAILABLE, INELIGIBLE }
@@ -86,18 +86,29 @@ data class Candidate(
     val previousDistanceMeters: Double,
 )
 
+data class ProgressLineCandidate(
+    val checkpoint: Checkpoint,
+    val crossingFix: LocationFix,
+    val crossTrackMeters: Double,
+    val consecutiveBeyondFixes: Int,
+    val maximumDepthMeters: Double,
+)
+
 data class EngineState(
     val status: EngineStatus = EngineStatus.ARMED,
     val nextCheckpointIndex: Int = 0,
     val passes: List<CheckpointPass> = emptyList(),
     val previousFix: LocationFix? = null,
     val candidate: Candidate? = null,
+    val progressLineCandidates: List<ProgressLineCandidate> = emptyList(),
+    val missedCheckpointIndices: Set<Int> = emptySet(),
     val startRequiresExit: Boolean? = null,
     val rejectedFixes: Int = 0,
 )
 
 sealed interface EngineEvent {
     data class PassConfirmed(val pass: CheckpointPass) : EngineEvent
+    data class CheckpointMissed(val checkpoint: Checkpoint) : EngineEvent
     data class SectorCompleted(val sectorIndex: Int, val durationNanos: Long) : EngineEvent
     data object Finished : EngineEvent
     data class FixRejected(val reason: String) : EngineEvent
@@ -128,4 +139,13 @@ data class GnssHealth(
     val visibleOther: Int = 0,
     val usedOther: Int = 0,
     val label: String = "正在定位",
-)
+    val locationEnabled: Boolean = true,
+) {
+    val visibleTotal: Int get() = visibleGps + visibleBeidou + visibleOther
+    val usedTotal: Int get() = usedGps + usedBeidou + usedOther
+    fun displayLabel(): String = when {
+        !locationEnabled -> "定位已关闭"
+        visibleTotal == 0 -> "卫星 0/0 · 正在搜星"
+        else -> "卫星 $usedTotal/$visibleTotal"
+    }
+}

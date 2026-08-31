@@ -50,6 +50,8 @@ data class RuntimeSnapshot(
     val weeklyReferenceTrack: List<LocationFix> = emptyList(),
     val weeklyReferencePassElapsedNanos: List<Long> = emptyList(),
     val actualPassElapsedNanos: List<Long> = emptyList(),
+    val actualPassOrderIndices: List<Int> = emptyList(),
+    val missedCheckpointIndices: Set<Int> = emptySet(),
     val gnssHealth: GnssHealth = GnssHealth(),
     val lastFix: LocationFix? = null,
     val track: List<LocationFix> = emptyList(),
