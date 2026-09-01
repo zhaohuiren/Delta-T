@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -49,9 +51,14 @@ class TelemetryRecordsScreenTest {
         assertTrue("上班应位于下班左侧", workLeft < homeLeft)
         composeRule.onNodeWithText("本月").assertExists()
         composeRule.onNodeWithText("排行榜").assertExists()
+        composeRule.onNodeWithTag("route-option-work").assertIsSelected()
+        composeRule.onNodeWithTag("route-option-home").assertIsNotSelected()
+        composeRule.onNodeWithTag("records-tab-LEADERBOARD").assertIsSelected()
+        composeRule.onNodeWithTag("period-本月").assertIsSelected()
         composeRule.onNodeWithText("P1").assertExists()
         composeRule.onNodeWithTag("leaderboard-P1").assertTextContains("27:58.10")
         composeRule.onNodeWithTag("leaderboard-P1").assertTextContains("PB", substring = true)
+        composeRule.onNodeWithTag("leaderboard-P1").assertTextContains("本月最快", substring = true)
         composeRule.onNodeWithText("有效行程").assertExists()
         composeRule.onNodeWithText("月统计").performClick()
         composeRule.onNodeWithText("最近月平均").assertExists()

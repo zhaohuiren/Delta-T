@@ -168,7 +168,7 @@ class DeltaTDatabaseTest {
         dao.insertRoute(RouteProfileEntity("r", "上班", "TO_WORK", activeCheckpointVersionId = "v", createdAtMillis = 1, updatedAtMillis = 1))
         suspend fun insert(id: String, total: Long, sectors: List<Long>, started: Long) {
             dao.insertSession(SessionEntity(id, "r", "v", "TIMED", "COMPLETED", null, started, totalDurationNanos = total, validity = "VALID", qualityGrade = "A", bootCount = 0, appVersion = "test", deviceModel = "test", androidVersion = "16", createdAtMillis = started))
-            dao.insertEvaluation(SessionEvaluationEntity("e-$id", id, "v", "VALID", totalDurationNanos = total, qualityGrade = "A", recordQualified = true, timingEngineVersion = 2, createdAtMillis = started, updatedAtMillis = started))
+            dao.insertEvaluation(SessionEvaluationEntity("e-$id", id, "v", "VALID", totalDurationNanos = total, qualityGrade = "A", recordQualified = true, timingEngineVersion = 3, createdAtMillis = started, updatedAtMillis = started))
             sectors.forEachIndexed { index, duration -> dao.insertEvaluationSector(EvaluationSectorEntity("e-$id", index, duration, recordQualified = true)) }
         }
         insert("best-s1", 100, listOf(10, 50, 40), now - 2_000)
@@ -262,7 +262,7 @@ class DeltaTDatabaseTest {
         )
         dao.insertSector(SectorResultEntity("old", 0, 20, null, null, null, "PURPLE", true))
         dao.insertSector(SectorResultEntity("new", 0, 30, null, null, null, "NEUTRAL", true))
-        dao.insertEvaluation(SessionEvaluationEntity("e-new", "new", "v2", "VALID", totalDurationNanos = 100, qualityGrade = "A", recordQualified = true, timingEngineVersion = 2, createdAtMillis = 2, updatedAtMillis = 2))
+        dao.insertEvaluation(SessionEvaluationEntity("e-new", "new", "v2", "VALID", totalDurationNanos = 100, qualityGrade = "A", recordQualified = true, timingEngineVersion = 3, createdAtMillis = 2, updatedAtMillis = 2))
         dao.insertEvaluationSector(EvaluationSectorEntity("e-new", 0, 30, recordQualified = true))
 
         assertEquals(30L, AppRepository(db).sectorBests("r").single().durationNanos)
@@ -322,6 +322,61 @@ class DeltaTDatabaseTest {
         assertEquals(3, dao.evaluationSectors(requireNotNull(dao.evaluation("history", request.checkpointVersionId)).id).size)
         assertEquals("COMPLETED", dao.recalculationJob(request.jobId)?.status)
         assertTrue(dao.evaluation("source", "v1") != null)
+        db.close()
+    }
+
+    @Test fun engineV3UpgradeKeepsOriginalRowsAndSwitchesCheckpointVersionOnlyAfterReplay() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), DeltaTDatabase::class.java).build()
+        val dao = db.dao()
+        dao.insertRoute(RouteProfileEntity("r", "上班", "TO_WORK", activeCheckpointVersionId = "v2", referenceSessionId = "source", createdAtMillis = 1, updatedAtMillis = 1))
+        dao.insertVersion(CheckpointVersionEntity("v2", "r", 1, "source", 1, true, "旧计时引擎"))
+        dao.insertSession(
+            SessionEntity(
+                id = "source", routeProfileId = "r", checkpointVersionId = "v2", mode = "BASELINE_RECORDING", status = "RECORDED",
+                referenceSessionIdSnapshot = null, startedWallTimeMillis = 1, bootCount = 0,
+                appVersion = "0.5.0", deviceModel = "test", androidVersion = "16", createdAtMillis = 1,
+            ),
+        )
+        val pointIds = (0..7).map { index ->
+            dao.insertTrackPoint(
+                TrackPointEntity(
+                    sessionId = "source", sequence = index.toLong(), latitude = 31.0, longitude = 121.0 + index * .001,
+                    elapsedRealtimeNanos = index * 10_000_000_000L, wallTimeMillis = index * 10_000L,
+                    accuracyMeters = 5.0, speedMps = 12.0, bearingDegrees = 90.0, bearingAccuracy = 3.0,
+                    provider = "gps", isMock = false, usedForTiming = true,
+                ),
+            )
+        }
+        val selected = listOf(0, 2, 4, 7)
+        dao.insertCheckpoints(selected.mapIndexed { order, pointIndex ->
+            CheckpointEntity(
+                id = "old-$order", checkpointVersionId = "v2", orderIndex = order,
+                label = listOf("A", "S1", "S2", "B")[order], latitude = 31.0, longitude = 121.0 + pointIndex * .001,
+                radiusMeters = 35.0, preferredBearing = 90.0, bearingTolerance = 100.0, gateHalfWidthMeters = 50.0,
+                sourceTrackPointId = pointIds[pointIndex],
+            )
+        })
+        dao.insertEvaluation(
+            SessionEvaluationEntity(
+                id = "original-evaluation", sessionId = "source", checkpointVersionId = "v2", status = "VALID",
+                totalDurationNanos = 70_000_000_000L, qualityGrade = "B", recordQualified = true,
+                timingEngineVersion = 2, createdAtMillis = 1, updatedAtMillis = 1,
+            ),
+        )
+        val repository = AppRepository(db)
+
+        assertEquals(8, repository.routeSourceTrack("r").size)
+        repository.prepareTimingEngineV3Upgrade()
+        assertEquals("v2", dao.route("r")?.activeCheckpointVersionId)
+
+        repository.runPendingRecalculations()
+
+        val upgradedVersion = requireNotNull(dao.route("r")?.activeCheckpointVersionId)
+        assertTrue(upgradedVersion != "v2")
+        assertEquals(3, dao.evaluation("source", upgradedVersion)?.timingEngineVersion)
+        assertTrue(dao.evaluation("source", "v2") != null)
+        assertEquals(8, dao.track("source").size)
+        assertEquals("source", dao.route("r")?.referenceSessionId)
         db.close()
     }
 

@@ -32,6 +32,15 @@ class GeometryTest {
         assertEquals(20.0, Geometry.angularDifference(350.0, 10.0), .001)
     }
 
+    @Test fun dominantRouteAxisCreatesHorizontalOrVerticalProgressLines() {
+        assertEquals(ProgressLineAxis.EAST_WEST, Geometry.progressLineAxis(31.0, 121.0, 31.01, 121.002))
+        assertEquals(0.0, Geometry.axisAlignedRouteBearing(31.0, 121.0, 31.01, 121.002), .001)
+        assertEquals(ProgressLineAxis.NORTH_SOUTH, Geometry.progressLineAxis(31.0, 121.0, 31.002, 121.01))
+        assertEquals(90.0, Geometry.axisAlignedRouteBearing(31.0, 121.0, 31.002, 121.01), .001)
+        assertEquals(180.0, Geometry.axisAlignedRouteBearing(31.01, 121.0, 31.0, 121.002), .001)
+        assertEquals(270.0, Geometry.axisAlignedRouteBearing(31.0, 121.01, 31.002, 121.0), .001)
+    }
+
     @Test fun crossingGuardBranchesRejectBadGeometryAndDirection() {
         val base = Checkpoint("A", 0, "A", 31.0, 121.0, preferredBearing = 90.0)
         assertNull(Geometry.crossing(fix(31.0, 120.9998, 1), fix(31.0, 120.9997, 2), base))

@@ -1,6 +1,7 @@
 package app.deltat.commute.location
 
 import app.deltat.commute.domain.EngineStatus
+import app.deltat.commute.domain.Checkpoint
 import app.deltat.commute.domain.DeltaConfidence
 import app.deltat.commute.domain.DeltaReferenceType
 import app.deltat.commute.domain.GnssHealth
@@ -44,6 +45,8 @@ data class RuntimeSnapshot(
     val maxSpeedElapsedNanos: Long? = null,
     val maxSpeedWallTimeMillis: Long? = null,
     val referenceTrack: List<LocationFix> = emptyList(),
+    val routeSourceTrack: List<LocationFix> = emptyList(),
+    val routeCheckpoints: List<Checkpoint> = emptyList(),
     val checkpointPassElapsedNanos: List<Long> = emptyList(),
     val monthlyReferenceTrack: List<LocationFix> = emptyList(),
     val monthlyReferencePassElapsedNanos: List<Long> = emptyList(),

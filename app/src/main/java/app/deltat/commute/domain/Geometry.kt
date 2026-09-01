@@ -31,6 +31,24 @@ object Geometry {
 
     fun angularDifference(a: Double, b: Double): Double = abs((a - b + 540.0) % 360.0 - 180.0)
 
+    fun progressLineAxis(aLat: Double, aLon: Double, bLat: Double, bLon: Double): ProgressLineAxis {
+        val (eastMeters, northMeters) = toLocalMeters(bLat, bLon, aLat, aLon)
+        return if (abs(northMeters) >= abs(eastMeters)) ProgressLineAxis.EAST_WEST else ProgressLineAxis.NORTH_SOUTH
+    }
+
+    /**
+     * Snaps A→B to its dominant compass axis. The timing plane perpendicular to this
+     * bearing is therefore always horizontal or vertical on a north-up map.
+     */
+    fun axisAlignedRouteBearing(aLat: Double, aLon: Double, bLat: Double, bLon: Double): Double {
+        val (eastMeters, northMeters) = toLocalMeters(bLat, bLon, aLat, aLon)
+        return if (abs(northMeters) >= abs(eastMeters)) {
+            if (northMeters >= 0.0) 0.0 else 180.0
+        } else {
+            if (eastMeters >= 0.0) 90.0 else 270.0
+        }
+    }
+
     data class Crossing(val ratio: Double, val crossTrackMeters: Double)
 
     fun signedProgressMeters(latitude: Double, longitude: Double, checkpoint: Checkpoint, routeBearing: Double): Double {

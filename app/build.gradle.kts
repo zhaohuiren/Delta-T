@@ -1,8 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.android.legacy-kapt")
 }
+
+val localProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
+}
+val amapApiKey = providers.gradleProperty("AMAP_API_KEY")
+    .orElse(providers.environmentVariable("AMAP_API_KEY"))
+    .orElse(localProperties.getProperty("AMAP_API_KEY", ""))
+val escapedAmapApiKey = amapApiKey.get().replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "app.deltat.commute"
@@ -12,10 +22,13 @@ android {
         applicationId = "app.deltat.commute"
         minSdk = 29
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.5.0-test"
+        versionCode = 10
+        versionName = "0.6.0-test"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        buildConfigField("boolean", "AMAP_AVAILABLE", amapApiKey.get().isNotBlank().toString())
+        buildConfigField("String", "AMAP_API_KEY", "\"$escapedAmapApiKey\"")
+        manifestPlaceholders["AMAP_API_KEY"] = amapApiKey.get()
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments["room.schemaLocation"] = "$projectDir/schemas"
@@ -78,6 +91,7 @@ dependencies {
     // Room 2.8.4 migration bundles are generated against serialization 1.8.1.
     // Pin the app/test runtime to the same binary-compatible version.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+    implementation("com.amap.api:3dmap-location-search:11.2.100_loc11.2.100_sea9.8.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

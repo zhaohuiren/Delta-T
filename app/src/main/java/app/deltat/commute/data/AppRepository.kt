@@ -111,6 +111,11 @@ class AppRepository(private val database: DeltaTDatabase) {
         return route.activeCheckpointVersionId?.let { dao.checkpoints(it) }.orEmpty()
     }
 
+    suspend fun routeSourceTrack(routeId: String): List<TrackPointEntity> {
+        val sourceSessionId = dao.route(routeId)?.referenceSessionId ?: return emptyList()
+        return dao.track(sourceSessionId)
+    }
+
     suspend fun readyRouteCandidates(): List<RouteCandidate> = routes.first().mapNotNull { route ->
         val checkpoints = checkpointsForRoute(route.id)
         checkpoints.takeIf { it.size == 4 }?.let { RouteCandidate(route.id, route.name, route.createdAtMillis, it) }
@@ -182,8 +187,8 @@ class AppRepository(private val database: DeltaTDatabase) {
         return TimingBenchmarks(
             monthlyTotal = reference(bounds.monthStartMillis, DeltaReferenceType.MONTHLY_BEST),
             weeklyTotal = reference(bounds.weekStartMillis, DeltaReferenceType.WEEKLY_BEST),
-            monthlySectorBestNanos = sectorDurations(dao.evaluationSectorBestsInPeriod(routeId, version, bounds.monthStartMillis, bounds.endExclusiveMillis)),
-            weeklySectorBestNanos = sectorDurations(dao.evaluationSectorBestsInPeriod(routeId, version, bounds.weekStartMillis, bounds.endExclusiveMillis)),
+            monthlySectorBestNanos = sectorDurations(dao.evaluationSectorBestsInPeriod(routeId, version, DefaultTimingEngine.TIMING_ENGINE_VERSION, bounds.monthStartMillis, bounds.endExclusiveMillis)),
+            weeklySectorBestNanos = sectorDurations(dao.evaluationSectorBestsInPeriod(routeId, version, DefaultTimingEngine.TIMING_ENGINE_VERSION, bounds.weekStartMillis, bounds.endExclusiveMillis)),
             monthlySectorReferences = sectorReferences(bounds.monthStartMillis, DeltaReferenceType.MONTHLY_BEST),
             weeklySectorReferences = sectorReferences(bounds.weekStartMillis, DeltaReferenceType.WEEKLY_BEST),
             bounds = bounds,
@@ -469,6 +474,10 @@ class AppRepository(private val database: DeltaTDatabase) {
         }
     }
 
+    suspend fun prepareTimingEngineV3Upgrade() {
+        routes.first().forEach { route -> historicalRecalculator.createEngineUpgrade(route.id) }
+    }
+
     suspend fun markInterrupted(sessionId: String, reason: String) = dao.markInterrupted(sessionId, System.currentTimeMillis(), reason)
 
     suspend fun saveGnss(sessionId: String, elapsedRealtimeNanos: Long, health: GnssHealth) {
@@ -495,7 +504,7 @@ class AppRepository(private val database: DeltaTDatabase) {
 
     suspend fun sectorBests(routeId: String): List<SectorBestRow> {
         val version = dao.route(routeId)?.activeCheckpointVersionId ?: return emptyList()
-        return dao.evaluationSectorBests(routeId, version)
+        return dao.evaluationSectorBests(routeId, version, DefaultTimingEngine.TIMING_ENGINE_VERSION)
     }
 
     suspend fun comparableSessions(routeId: String): List<SessionEntity> {

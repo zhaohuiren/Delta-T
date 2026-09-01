@@ -54,6 +54,10 @@ class FullAppUiFlowTest {
         composeRule.saveScreenshot("history-mock-list.png")
 
         composeRule.onAllNodes(hasText("27:40.00") and hasClickAction()).onFirst().performClick()
+        composeRule.waitForIdle()
+        if (composeRule.onAllNodesWithText("继续简洁模式").fetchSemanticsNodes().isNotEmpty()) {
+            composeRule.onNodeWithText("继续简洁模式").performClick()
+        }
         composeRule.onNodeWithText("旧计时点版本 · 不参与当前纪录").assertExists()
         composeRule.onNodeWithText("设为固定基准").assertDoesNotExist()
         composeRule.saveScreenshot("history-mock-old-detail.png")
@@ -87,7 +91,7 @@ class FullAppUiFlowTest {
         composeRule.onNodeWithText("CSV").assertExists()
         composeRule.saveScreenshot("settings-mock-export.png")
         composeRule.onNodeWithTag("settings-list").performScrollToIndex(10)
-        composeRule.onNode(hasText("Delta T 0.5.0-test", substring = true)).assertExists()
+        composeRule.onNode(hasText("Delta T ${BuildConfig.VERSION_NAME}", substring = true)).assertExists()
 
         composeRule.onNodeWithText("首页").performClick()
         composeRule.onNodeWithText("准备出发").assertExists()

@@ -3,6 +3,7 @@ package app.deltat.commute.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -11,9 +12,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -23,6 +27,7 @@ import androidx.compose.ui.window.Dialog
 import app.deltat.commute.data.LeaderboardRow
 import app.deltat.commute.data.RouteProfileEntity
 import app.deltat.commute.data.SessionListRow
+import app.deltat.commute.data.comparisonPeriodBounds
 import app.deltat.commute.domain.*
 import java.text.SimpleDateFormat
 import java.time.Instant
@@ -81,6 +86,20 @@ fun TelemetryRecordsScreen(
     val timedResults = remember(allRows) { allRows.map { TimedResultSummary(it.sessionId, it.startedWallTimeMillis, it.totalDurationNanos) } }
     val monthly = remember(timedResults) { StatisticsAggregator.monthly(timedResults) }
     val weekly = remember(timedResults) { StatisticsAggregator.weekly(timedResults) }
+    val resultColors = remember(allRows) {
+        val bounds = comparisonPeriodBounds(System.currentTimeMillis())
+        val monthBest = allRows.filter { it.startedWallTimeMillis in bounds.monthStartMillis until bounds.endExclusiveMillis }
+            .minWithOrNull(compareBy<LeaderboardRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.sessionId })?.sessionId
+        val weekBest = allRows.filter { it.startedWallTimeMillis in bounds.weekStartMillis until bounds.endExclusiveMillis }
+            .minWithOrNull(compareBy<LeaderboardRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.sessionId })?.sessionId
+        allRows.associate { row ->
+            row.sessionId to when (row.sessionId) {
+                monthBest -> ResultColor.PURPLE
+                weekBest -> ResultColor.GREEN
+                else -> ResultColor.YELLOW
+            }
+        }
+    }
 
     if (showDateRange) {
         DateRangeDialog(
@@ -98,32 +117,17 @@ fun TelemetryRecordsScreen(
                 verticalArrangement = Arrangement.spacedBy(13.dp),
             ) {
                 item {
-                    if (displayRoutes.isNotEmpty()) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-                        displayRoutes.take(4).forEachIndexed { index, route ->
-                            SegmentedButton(
-                                selected = selectedRouteId == route.id,
-                                onClick = { selectedRouteId = route.id },
-                                shape = SegmentedButtonDefaults.itemShape(index, displayRoutes.take(4).size),
-                            ) { Text(route.name, maxLines = 1, fontSize = 16.sp) }
-                        }
-                    }
+                    if (displayRoutes.isNotEmpty()) RouteSelector(displayRoutes.take(4), selectedRouteId) { selectedRouteId = it }
                 }
                 item {
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().heightIn(min = 54.dp).testTag("records-tabs")) {
-                        RecordsTab.entries.forEachIndexed { index, item ->
-                            SegmentedButton(
-                                selected = tab == item,
-                                onClick = { tab = item },
-                                shape = SegmentedButtonDefaults.itemShape(index, RecordsTab.entries.size),
-                            ) { Text(item.title, fontWeight = if (tab == item) FontWeight.Bold else FontWeight.Normal) }
-                        }
-                    }
+                    RecordsTabs(tab) { tab = it }
                 }
                 if (displayRoutes.isEmpty()) item { RecordsEmpty("请先建立路线并完成有效行程") }
                 else when (tab) {
                     RecordsTab.LEADERBOARD -> leaderboardContent(
                         rows = rankedRows,
                         theoreticalBest = theoreticalBest,
+                        resultColors = resultColors,
                         filter = filter,
                         onFilter = { selected ->
                             if (selected == null) showDateRange = true else filter = selected
@@ -141,6 +145,7 @@ fun TelemetryRecordsScreen(
 private fun androidx.compose.foundation.lazy.LazyListScope.leaderboardContent(
     rows: List<LeaderboardRow>,
     theoreticalBest: Long?,
+    resultColors: Map<String, ResultColor>,
     filter: LeaderboardPeriodFilter,
     onFilter: (LeaderboardPeriodFilter?) -> Unit,
     onOpenSession: (String) -> Unit,
@@ -160,6 +165,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.leaderboardContent(
             position = index + 1,
             row = row,
             gap = row.totalDurationNanos - rows.first().totalDurationNanos,
+            resultColor = resultColors[row.sessionId] ?: ResultColor.YELLOW,
             onClick = { onOpenSession(row.sessionId) },
         )
     }
@@ -170,7 +176,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.aggregateContent(rows
     item {
         Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(18.dp)) {
             Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text(if (monthly) "最近月平均" else "最近周平均", color = RacingRed, fontWeight = FontWeight.Bold)
+                Text(if (monthly) "最近月平均" else "最近周平均", color = if (monthly) Purple else Green, fontWeight = FontWeight.Bold)
                 Text(
                     latest?.averageDurationNanos?.let(::formatRecordDuration) ?: "--",
                     fontFamily = FontFamily.Monospace,
@@ -192,18 +198,23 @@ private fun androidx.compose.foundation.lazy.LazyListScope.aggregateContent(rows
 private fun PeriodButton(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
-        modifier = modifier.height(50.dp),
-        colors = ButtonDefaults.outlinedButtonColors(containerColor = if (selected) RacingRed else Color.Transparent),
+        modifier = modifier.height(50.dp).testTag("period-$label").semantics { this.selected = selected },
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) Color(0xFF171B20) else Color.Transparent,
+            contentColor = if (selected) TelemetryWhite else Muted,
+            disabledContainerColor = Color(0xFF111318),
+            disabledContentColor = Muted.copy(alpha = .5f),
+        ),
         border = ButtonDefaults.outlinedButtonBorder(enabled = true).copy(brush = androidx.compose.ui.graphics.SolidColor(if (selected) RacingRed else Color(0xFF3B4147))),
         contentPadding = PaddingValues(horizontal = 2.dp),
-    ) { Text(label, maxLines = 1, fontSize = 13.sp) }
+    ) { Text(label, maxLines = 1, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal) }
 }
 
 @Composable
 private fun RecordsHero(pb: Long?, theoreticalBest: Long?, count: Int) {
     Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("筛选范围 PB", color = RacingRed, fontWeight = FontWeight.Bold)
+            Text("筛选范围 PB", color = Purple, fontWeight = FontWeight.Bold)
             Text(pb?.let(::formatRecordDuration) ?: "--", fontFamily = FontFamily.Monospace, fontSize = 44.sp, fontWeight = FontWeight.Black)
             HorizontalDivider(color = Color(0xFF343A40))
             Row {
@@ -223,7 +234,8 @@ private fun RecordMetricInline(label: String, value: String, modifier: Modifier)
 }
 
 @Composable
-private fun LeaderboardCard(position: Int, row: LeaderboardRow, gap: Long, onClick: () -> Unit) {
+private fun LeaderboardCard(position: Int, row: LeaderboardRow, gap: Long, resultColor: ResultColor, onClick: () -> Unit) {
+    val accent = telemetryColor(resultColor)
     Card(
         Modifier.fillMaxWidth().testTag("leaderboard-P$position").clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = Surface),
@@ -231,12 +243,20 @@ private fun LeaderboardCard(position: Int, row: LeaderboardRow, gap: Long, onCli
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("P$position", color = RacingRed, fontSize = if (position == 1) 28.sp else 23.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(62.dp))
+                Text("P$position", color = accent, fontSize = if (position == 1) 28.sp else 23.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(62.dp))
                 Column(Modifier.weight(1f)) {
                     Text(formatRecordDuration(row.totalDurationNanos), fontFamily = FontFamily.Monospace, fontSize = if (position == 1) 25.sp else 21.sp, fontWeight = FontWeight.Bold)
                     Text(if (position == 1) "GAP —" else "GAP +${formatRecordDuration(gap)}", color = Muted, fontSize = 12.sp)
                 }
-                Text(if (position == 1) "PB · 质量 ${row.qualityGrade}" else "质量 ${row.qualityGrade}", color = Purple, fontSize = 12.sp)
+                Text(
+                    when (resultColor) {
+                        ResultColor.PURPLE -> "PB · 本月最快 · 质量 ${row.qualityGrade}"
+                        ResultColor.GREEN -> "本周最快 · 质量 ${row.qualityGrade}"
+                        else -> "质量 ${row.qualityGrade}"
+                    },
+                    color = accent,
+                    fontSize = 12.sp,
+                )
             }
             HorizontalDivider(color = Color(0xFF343A40))
             Row {
@@ -297,9 +317,54 @@ private fun PeriodTrendChart(rows: List<PeriodAggregate>, monthly: Boolean, modi
                 offsets.zipWithNext().forEachIndexed { index, (a, b) ->
                     val gap = if (monthly) ChronoUnit.MONTHS.between(rows[index].periodStart.withDayOfMonth(1), rows[index + 1].periodStart.withDayOfMonth(1))
                     else ChronoUnit.WEEKS.between(rows[index].periodStart, rows[index + 1].periodStart)
-                    if (gap == 1L) drawLine(RacingRed, a, b, strokeWidth = 3.dp.toPx())
+                    if (gap == 1L) drawLine(if (monthly) Purple else Green, a, b, strokeWidth = 3.dp.toPx())
                 }
-                offsets.forEach { point -> drawCircle(RacingRed, 5.dp.toPx(), point); drawCircle(Color.White, 2.dp.toPx(), point) }
+                offsets.forEach { point -> drawCircle(if (monthly) Purple else Green, 5.dp.toPx(), point); drawCircle(Color.White, 2.dp.toPx(), point) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RouteSelector(routes: List<RouteProfileEntity>, selectedRouteId: String?, onSelect: (String) -> Unit) {
+    val outer = RoundedCornerShape(28.dp)
+    Row(Modifier.fillMaxWidth().height(52.dp).clip(outer).border(1.dp, Color(0xFF5D626A), outer)) {
+        routes.forEachIndexed { index, route ->
+            val selected = selectedRouteId == route.id
+            Row(
+                Modifier.weight(1f).fillMaxHeight()
+                    .background(if (selected) Color(0xFF5C171D) else Color(0xFF090B0E))
+                    .then(if (index > 0) Modifier.border(width = 0.5.dp, color = Color(0xFF5D626A)) else Modifier)
+                    .testTag("route-option-${route.id}").semantics { this.selected = selected }
+                    .clickable { onSelect(route.id) },
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (selected) { Text("✓", color = Color.White, fontSize = 17.sp); Spacer(Modifier.width(8.dp)) }
+                Text(route.name, color = if (selected) Color.White else TelemetryWhite.copy(alpha = .85f), maxLines = 1, fontSize = 16.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecordsTabs(selected: RecordsTab, onSelect: (RecordsTab) -> Unit) {
+    val outer = RoundedCornerShape(26.dp)
+    Row(Modifier.fillMaxWidth().height(54.dp).clip(outer).border(1.dp, Color(0xFF5D626A), outer).testTag("records-tabs")) {
+        RecordsTab.entries.forEachIndexed { index, tab ->
+            Box(
+                Modifier.weight(1f).fillMaxHeight().background(Color(0xFF111318))
+                    .then(if (index > 0) Modifier.border(width = 0.5.dp, color = Color(0xFF5D626A)) else Modifier)
+                    .testTag("records-tab-${tab.name}").semantics { this.selected = selected == tab }
+                    .clickable { onSelect(tab) },
+            ) {
+                Text(
+                    tab.title,
+                    color = if (selected == tab) Color.White else Muted,
+                    fontWeight = if (selected == tab) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                if (selected == tab) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth(.55f).height(2.dp).background(RacingRed))
             }
         }
     }

@@ -20,6 +20,7 @@ import app.deltat.commute.domain.EngineStatus
 import app.deltat.commute.domain.GnssHealth
 import app.deltat.commute.domain.LocationFix
 import app.deltat.commute.domain.ResultColor
+import app.deltat.commute.domain.Checkpoint
 import app.deltat.commute.location.RuntimeSector
 import app.deltat.commute.location.RuntimeSnapshot
 import app.deltat.commute.ui.DeltaTTheme
@@ -80,6 +81,8 @@ class TimingScreenTest {
         composeRule.onNodeWithText("周 Δ −00:08.40").assertExists()
         composeRule.onNodeWithText("月 Δ +00:02.40").assertExists()
         composeRule.onNodeWithText("有望本周最佳 · 实时估算").assertExists()
+        composeRule.onNodeWithText("卫星 11/20").assertExists()
+        composeRule.onNodeWithTag("abstract-route-map").assertExists()
         composeRule.onNodeWithTag("sector-card-S1").assertExists()
         composeRule.onNodeWithTag("sector-card-S2").assertExists()
         composeRule.onNodeWithTag("sector-card-S3").assertExists()
@@ -121,8 +124,7 @@ class TimingScreenTest {
         sessionId = "waiting", routeId = "work", routeName = "上班",
         routeDetectionDistanceMeters = 128.0, mode = "AUTO_ARMING", status = "等待驶过起点 A",
         engineStatus = EngineStatus.ARMED, gnssHealth = goodGnss(), track = track().take(3),
-        referenceTrack = track(),
-        checkpointPassElapsedNanos = listOf(0, 13, 26, 39).map { track()[it].elapsedRealtimeNanos },
+        routeSourceTrack = track(), routeCheckpoints = checkpoints(),
     )
 
     private fun liveSnapshot(): RuntimeSnapshot {
@@ -146,6 +148,8 @@ class TimingScreenTest {
             maxSpeedMps = 82.4 / 3.6,
             maxSpeedElapsedNanos = points[18].elapsedRealtimeNanos,
             referenceTrack = points.map { it.copy(latitude = it.latitude + .00003) },
+            routeSourceTrack = points,
+            routeCheckpoints = checkpoints(),
             checkpointPassElapsedNanos = listOf(0, 13, 26, 39).map { points[it].elapsedRealtimeNanos },
             actualPassElapsedNanos = listOf(points[0].elapsedRealtimeNanos, points[13].elapsedRealtimeNanos),
             gnssHealth = goodGnss(), track = points.take(27), lastFix = points[26],
@@ -178,6 +182,11 @@ class TimingScreenTest {
     }
 
     private fun goodGnss() = GnssHealth(visibleGps = 12, usedGps = 6, visibleBeidou = 8, usedBeidou = 5, label = "GNSS 良好")
+
+    private fun checkpoints() = listOf(0, 13, 26, 39).mapIndexed { order, pointIndex ->
+        val point = track()[pointIndex]
+        Checkpoint("cp$order", order, listOf("A", "S1", "S2", "B")[order], point.latitude, point.longitude)
+    }
 
     private fun track(): List<LocationFix> = (0 until 40).map { index ->
         LocationFix(

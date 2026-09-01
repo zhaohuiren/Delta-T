@@ -68,6 +68,7 @@ import app.deltat.commute.domain.DeltaReferenceType
 import app.deltat.commute.domain.LocationFix
 import app.deltat.commute.domain.ResultColor
 import app.deltat.commute.location.RuntimeBus
+import app.deltat.commute.map.MapCameraPolicy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.delay
@@ -89,10 +90,37 @@ fun DeltaTApp(
     val sessions by viewModel.sessions.collectAsState()
     val leaderboard by viewModel.leaderboard.collectAsState()
     val runtime by RuntimeBus.state.collectAsState()
+    val amapPrivacyAgreed by viewModel.amapPrivacyAgreed.collectAsState()
+    val amapPrivacyPrompted by viewModel.amapPrivacyPrompted.collectAsState()
+    val currentDestination = nav.currentBackStackEntryAsState().value?.destination?.route
+    var showMapPrivacyDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(currentDestination, viewModel.mapAvailable, amapPrivacyAgreed, amapPrivacyPrompted) {
+        val isMapPage = currentDestination == "timing" || currentDestination?.startsWith("ready/") == true ||
+            currentDestination?.startsWith("baseline/") == true || currentDestination?.startsWith("detail/") == true
+        if (isMapPage && viewModel.mapAvailable && !amapPrivacyAgreed && !amapPrivacyPrompted) showMapPrivacyDialog = true
+    }
+    if (showMapPrivacyDialog) {
+        AlertDialog(
+            onDismissRequest = { showMapPrivacyDialog = false; viewModel.declineAmapPrivacy() },
+            title = { Text("启用高德地图？") },
+            text = {
+                Text("启用后会加载高德路网底图。原始通勤轨迹仍只保存在本机；高德地图 SDK 会处理提供地图所需的设备与网络信息。不同意时仍可使用黑底简洁轨迹。")
+            },
+            confirmButton = {
+                TextButton(onClick = { showMapPrivacyDialog = false; viewModel.agreeToAmapPrivacy() }) { Text("同意并启用") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMapPrivacyDialog = false; viewModel.declineAmapPrivacy() }) { Text("继续简洁模式") }
+            },
+        )
+    }
     Scaffold(
             bottomBar = { BottomNavigation(nav) },
             containerColor = Background,
         ) { padding ->
+            CompositionLocalProvider(
+                LocalMapFeatureConfig provides MapFeatureConfig(viewModel.mapAvailable, amapPrivacyAgreed),
+            ) {
             NavHost(nav, startDestination = "home", modifier = Modifier.padding(padding)) {
             composable("home") {
                 HomeScreen(
@@ -152,6 +180,7 @@ fun DeltaTApp(
             }
             composable("records") { TelemetryRecordsScreen(routes, sessions, leaderboard) { nav.navigate("detail/$it") } }
             composable("settings") { SettingsScreen(permissionGranted, withPermissions, viewModel, nav) }
+            }
             }
     }
 }
@@ -487,7 +516,12 @@ internal fun BaselineScreen(nav: NavController, route: RouteProfileEntity?, runt
         Column(Modifier.fillMaxSize().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text(route?.name ?: "路线", fontSize = 22.sp, fontWeight = FontWeight.Bold)
             StatusPill(if (active) runtime.gnssHealth.displayLabel() else "准备开始", if (active && runtime.lastFix?.accuracyMeters ?: 999.0 <= 25) Green else Yellow)
-            AbstractRoute(runtime.track.map { it.latitude to it.longitude }, Modifier.fillMaxWidth().weight(1f))
+            TelemetryRoute(
+                points = runtime.track,
+                currentFix = runtime.lastFix,
+                cameraPolicy = MapCameraPolicy.STAGED_RECORDING,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
             Text(if (active) "正在记录完整轨迹 · ${formatDuration(runtime.elapsedNanos)}" else "出发前点击开始；驾驶过程中无需操作，到达并停车后再结束。", color = Muted)
             if (!active && runtime.status == "路线轨迹已录制" && runtime.sessionId != null) {
                 Button(onClick = { nav.navigate("edit/${runtime.sessionId}") }, modifier = Modifier.fillMaxWidth()) { Text("标记 A / S1 / S2 / B") }
@@ -724,10 +758,14 @@ internal fun TimingScreen(
             TelemetryRoute(
                 points = runtime.track,
                 referencePoints = runtime.monthlyReferenceTrack.ifEmpty { runtime.referenceTrack },
+                routeSourcePoints = runtime.routeSourceTrack,
+                checkpoints = runtime.routeCheckpoints,
+                currentFix = runtime.lastFix,
                 referencePassElapsedNanos = runtime.monthlyReferencePassElapsedNanos.ifEmpty { runtime.checkpointPassElapsedNanos },
                 actualPassElapsedNanos = runtime.actualPassElapsedNanos,
                 sectorColors = (0..2).map { runtime.sectors.getOrNull(it)?.color ?: ResultColor.NEUTRAL },
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                cameraPolicy = MapCameraPolicy.FULL_ROUTE_LOCKED,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 300.dp).weight(1f),
             )
             if (runtime.engineStatus == EngineStatus.ARMED && runtime.routeId != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -889,11 +927,7 @@ private fun F1SectorCell(
         current -> RacingRed
         else -> Color(0xFF4C5158)
     }
-    val fill = when {
-        sector != null -> accent.copy(alpha = .22f)
-        current -> accent.copy(alpha = .18f)
-        else -> Color(0xFF111419)
-    }
+    val fill = Color(0xFF111419)
     val duration = sector?.durationNanos?.let(::formatDuration) ?: if (current) "LIVE" else "--"
     val monthDelta = sector?.monthlyDeltaNanos ?: sector?.deltaNanos ?: if (current) liveMonthlyDeltaNanos else null
     val weekDelta = sector?.weeklyDeltaNanos ?: if (current) liveWeeklyDeltaNanos else null
@@ -910,7 +944,7 @@ private fun F1SectorCell(
             Text("周 ${weekDelta?.let(::formatDelta) ?: "--"}", color = periodDeltaColor(weekDelta, Green), fontFamily = FontFamily.Monospace, fontSize = 10.sp, maxLines = 1)
             Text(status, color = if (sector != null || current) TelemetryWhite.copy(alpha = .78f) else Muted, fontSize = 9.sp, maxLines = 1)
         }
-        Box(Modifier.fillMaxWidth().height(8.dp).background(if (sector != null || current) accent else Color(0xFF4C5158)))
+        Box(Modifier.fillMaxWidth().height(4.dp).background(if (sector != null || current) accent else Color(0xFF4C5158)))
     }
 }
 
@@ -968,6 +1002,9 @@ private fun WaitingAtStartScreen(
                 TelemetryRoute(
                     points = runtime.track,
                     referencePoints = runtime.referenceTrack,
+                    routeSourcePoints = runtime.routeSourceTrack,
+                    checkpoints = runtime.routeCheckpoints,
+                    currentFix = runtime.lastFix,
                     referencePassElapsedNanos = runtime.checkpointPassElapsedNanos,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
@@ -1089,6 +1126,12 @@ private fun SessionDetail(nav: NavController, viewModel: AppViewModel, sessionId
         ?: if (showOriginal) originalSession?.missingCheckpointMask ?: 0 else session?.missingCheckpointMask ?: 0
     val displayValidity = if (displayedEvaluation != null) if (displayedEvaluation.status == "VALID") "VALID" else "INVALID" else if (showOriginal) originalSession?.validity ?: "PENDING" else session?.validity ?: "PENDING"
     val currentRoute = routes.firstOrNull { it.id == session?.routeProfileId }
+    val routeSourceTrack by produceState(initialValue = emptyList<LocationFix>(), key1 = currentRoute?.id) {
+        value = currentRoute?.id?.let { routeId -> viewModel.repository.routeSourceTrack(routeId).map(::trackPointToFix) }.orEmpty()
+    }
+    val mapCheckpoints by produceState(initialValue = emptyList<app.deltat.commute.domain.Checkpoint>(), key1 = currentRoute?.id) {
+        value = currentRoute?.id?.let { routeId -> viewModel.repository.checkpointsForRoute(routeId) }.orEmpty()
+    }
     val activeVersionForSession = currentRoute?.activeCheckpointVersionId
     val legacyOldWithoutEvaluation = activeEvaluation == null && session?.checkpointVersionId != activeVersionForSession
     var confirmDelete by remember { mutableStateOf(false) }
@@ -1156,8 +1199,12 @@ private fun SessionDetail(nav: NavController, viewModel: AppViewModel, sessionId
             item {
                 TelemetryRoute(
                     points = track.map(::trackPointToFix),
+                    routeSourcePoints = routeSourceTrack,
+                    checkpoints = mapCheckpoints,
+                    currentFix = track.lastOrNull()?.let(::trackPointToFix),
                     actualPassElapsedNanos = passes.map { it.passElapsedNanos },
                     sectorColors = sectors.map { row -> runCatching { ResultColor.valueOf(row.resultColorAtCompletion) }.getOrDefault(ResultColor.NEUTRAL) },
+                    cameraPolicy = MapCameraPolicy.INTERACTIVE_DETAIL,
                     modifier = Modifier.fillMaxWidth().height(220.dp),
                 )
             }

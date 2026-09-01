@@ -9,7 +9,6 @@ import app.deltat.commute.domain.EngineState
 import app.deltat.commute.domain.EngineStatus
 import app.deltat.commute.domain.Geometry
 import app.deltat.commute.domain.LocationFix
-import app.deltat.commute.domain.LegacyTimingEngine
 import app.deltat.commute.domain.QualityGrade
 import app.deltat.commute.domain.RecordJudge
 import app.deltat.commute.domain.ResultColor
@@ -97,6 +96,49 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
         CheckpointRecalculationRequest(job.id, versionId)
     }
 
+    suspend fun createEngineUpgrade(routeId: String): String? = database.withTransaction {
+        val route = dao.route(routeId) ?: return@withTransaction null
+        if (dao.activeRecalculationJob(routeId) != null) return@withTransaction null
+        val currentVersionId = route.activeCheckpointVersionId ?: return@withTransaction null
+        val currentVersion = dao.checkpointVersion(currentVersionId) ?: return@withTransaction null
+        if (currentVersion.changeReason.startsWith(ENGINE_V3_REASON)) return@withTransaction null
+        val currentCheckpoints = dao.checkpoints(currentVersionId)
+        if (currentCheckpoints.size != 4) return@withTransaction null
+        val sourceSessionId = route.referenceSessionId ?: return@withTransaction null
+        val now = System.currentTimeMillis()
+        val versionId = UUID.randomUUID().toString()
+        val checkpoints = currentCheckpoints.map { checkpoint ->
+            checkpoint.copy(
+                id = UUID.randomUUID().toString(),
+                checkpointVersionId = versionId,
+            )
+        }
+        dao.insertVersion(
+            CheckpointVersionEntity(
+                id = versionId,
+                routeProfileId = routeId,
+                versionNumber = dao.maxVersion(routeId) + 1,
+                createdFromSessionId = sourceSessionId,
+                createdAtMillis = now,
+                active = false,
+                changeReason = ENGINE_V3_REASON,
+            ),
+        )
+        dao.insertCheckpoints(checkpoints)
+        val job = CheckpointRecalculationJobEntity(
+            id = UUID.randomUUID().toString(),
+            routeProfileId = routeId,
+            checkpointVersionId = versionId,
+            sourceSessionId = sourceSessionId,
+            status = "PENDING",
+            totalSessions = dao.recalculableSessions(routeId).size,
+            createdAtMillis = now,
+            updatedAtMillis = now,
+        )
+        dao.insertRecalculationJob(job)
+        job.id
+    }
+
     suspend fun runPending(jobId: String? = null) = runMutex.withLock {
         val jobs = if (jobId == null) dao.pendingRecalculationJobs() else listOfNotNull(dao.recalculationJob(jobId))
         jobs.filter { it.status == "PENDING" || it.status == "RUNNING" }.forEach { runJob(it) }
@@ -121,7 +163,11 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
             sessions.forEachIndexed { index, session ->
                 var evaluation = dao.evaluation(session.id, job.checkpointVersionId)
                 if (evaluation == null) {
-                    val result = replay(session, checkpoints.map { it.toDomain() })
+                    val result = if (session.id == job.sourceSessionId) {
+                        replayRouteSource(session, checkpoints) ?: replay(session, checkpoints.map { it.toDomain() })
+                    } else {
+                        replay(session, checkpoints.map { it.toDomain() })
+                    }
                     database.withTransaction {
                         persistEvaluation(session, job.checkpointVersionId, checkpoints, result, System.currentTimeMillis())
                     }
@@ -181,7 +227,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
         val track = dao.track(session.id)
         if (track.size < 4) return ReplayResult.Failure("没有完整历史轨迹")
         if (session.isMockDetected || track.any { it.isMock }) return ReplayResult.Failure("历史轨迹包含模拟定位", "LOW_QUALITY")
-        val engine = LegacyTimingEngine()
+        val engine = DefaultTimingEngine()
         var state = EngineState()
         track.forEach { point ->
             if (state.status == EngineStatus.COMPLETED) return@forEach
@@ -220,6 +266,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                     failureReason = result.reason,
                     qualityGrade = "C",
                     recordQualified = false,
+                    timingEngineVersion = DefaultTimingEngine.TIMING_ENGINE_VERSION,
                     createdAtMillis = existing?.createdAtMillis ?: createdAtMillis,
                     updatedAtMillis = createdAtMillis,
                 ),
@@ -238,6 +285,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                         totalDurationNanos = finish - start,
                         qualityGrade = result.grade.name,
                         recordQualified = result.grade != QualityGrade.C,
+                        timingEngineVersion = DefaultTimingEngine.TIMING_ENGINE_VERSION,
                         createdAtMillis = existing?.createdAtMillis ?: createdAtMillis,
                         updatedAtMillis = createdAtMillis,
                     ),
@@ -393,6 +441,26 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
             )
         }
 
+    private suspend fun replayRouteSource(
+        session: SessionEntity,
+        checkpoints: List<CheckpointEntity>,
+    ): ReplayResult.Success? {
+        val pointsById = dao.track(session.id).associateBy { it.id }
+        val passes = checkpoints.map { checkpoint ->
+            val point = checkpoint.sourceTrackPointId?.let(pointsById::get) ?: return null
+            CheckpointPass(
+                checkpoint = checkpoint.toDomain(),
+                elapsedRealtimeNanos = point.elapsedRealtimeNanos,
+                latitude = checkpoint.latitude,
+                longitude = checkpoint.longitude,
+                triggerMode = TriggerMode.MANUAL_REVIEW,
+                closestDistanceMeters = 0.0,
+                uncertaintyMillis = 500L,
+            )
+        }
+        return ReplayResult.Success(passes, QualityGrade.B, 0)
+    }
+
     private fun TrackPointEntity.toFix() = LocationFix(
         latitude = latitude,
         longitude = longitude,
@@ -429,5 +497,9 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
     private sealed interface ReplayResult {
         data class Success(val passes: List<CheckpointPass>, val grade: QualityGrade, val rejectedFixes: Int) : ReplayResult
         data class Failure(val reason: String, val status: String = "INCOMPLETE") : ReplayResult
+    }
+
+    private companion object {
+        const val ENGINE_V3_REASON = "计时引擎 v3：S1/S2 轴向无限参考线"
     }
 }

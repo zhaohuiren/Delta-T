@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.deltat.commute.BuildConfig
 import app.deltat.commute.DeltaTApplication
 import app.deltat.commute.data.AppRepository
 import app.deltat.commute.data.RouteProfileEntity
@@ -17,16 +18,40 @@ import app.deltat.commute.location.RuntimeBus
 import app.deltat.commute.domain.CheckpointSelection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
+    private val displayPreferences = application.getSharedPreferences("display_preferences", Application.MODE_PRIVATE)
+    private val privacyAgreedAtStartup = displayPreferences.getBoolean("amap_privacy_agreed", false)
+    private val _amapPrivacyAgreed = MutableStateFlow(privacyAgreedAtStartup)
+    val amapPrivacyAgreed: StateFlow<Boolean> = _amapPrivacyAgreed.asStateFlow()
+    private val _amapPrivacyPrompted = MutableStateFlow(
+        privacyAgreedAtStartup || displayPreferences.getBoolean("amap_privacy_prompted", false),
+    )
+    val amapPrivacyPrompted: StateFlow<Boolean> = _amapPrivacyPrompted.asStateFlow()
+    val mapAvailable: Boolean = BuildConfig.AMAP_AVAILABLE && BuildConfig.AMAP_API_KEY.isNotBlank()
     val repository: AppRepository = (application as DeltaTApplication).repository
     val routes: StateFlow<List<RouteProfileEntity>> = repository.routes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val sessions: StateFlow<List<SessionListRow>> = repository.sessions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val leaderboard: StateFlow<List<LeaderboardRow>> = repository.leaderboard.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun agreeToAmapPrivacy() {
+        if (!mapAvailable) return
+        _amapPrivacyAgreed.value = true
+        _amapPrivacyPrompted.value = true
+        displayPreferences.edit().putBoolean("amap_privacy_agreed", true).putBoolean("amap_privacy_prompted", true).apply()
+    }
+
+    fun declineAmapPrivacy() {
+        _amapPrivacyAgreed.value = false
+        _amapPrivacyPrompted.value = true
+        displayPreferences.edit().putBoolean("amap_privacy_agreed", false).putBoolean("amap_privacy_prompted", true).apply()
+    }
 
     fun createRoute(name: String, onCreated: (String) -> Unit) = viewModelScope.launch {
         onCreated(repository.createRoute(name))

@@ -5,7 +5,7 @@ data class LeaderboardLap(
     val totalDurationNanos: Long,
     val sectorNanos: List<Long?>,
     val startedWallTimeMillis: Long,
-    val timingEngineVersion: Int = 2,
+    val timingEngineVersion: Int = DefaultTimingEngine.TIMING_ENGINE_VERSION,
 )
 
 data class RankedLap(
@@ -26,8 +26,8 @@ object LeaderboardProjector {
     }
 
     fun theoreticalBestNanos(laps: List<LeaderboardLap>, sectorCount: Int = 3): Long? {
-        val v2 = laps.filter { it.timingEngineVersion == DefaultTimingEngine.TIMING_ENGINE_VERSION }
-        val best = (0 until sectorCount).map { index -> v2.mapNotNull { it.sectorNanos.getOrNull(index) }.minOrNull() }
+        val currentEngine = laps.filter { it.timingEngineVersion == DefaultTimingEngine.TIMING_ENGINE_VERSION }
+        val best = (0 until sectorCount).map { index -> currentEngine.mapNotNull { it.sectorNanos.getOrNull(index) }.minOrNull() }
         return best.takeIf { it.all { value -> value != null } }?.sumOf { requireNotNull(it) }
     }
 }

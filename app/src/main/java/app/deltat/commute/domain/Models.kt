@@ -32,6 +32,7 @@ enum class EngineStatus {
 }
 
 enum class TriggerMode { LINE_CROSSING, PROGRESS_LINE, CLOSEST_APPROACH, MANUAL_REVIEW }
+enum class ProgressLineAxis { EAST_WEST, NORTH_SOUTH }
 enum class QualityGrade { A, B, C }
 enum class ResultColor { PURPLE, GREEN, YELLOW, NEUTRAL }
 enum class PeriodComparisonStatus { FASTER, SLOWER, TIED, UNAVAILABLE, INELIGIBLE }

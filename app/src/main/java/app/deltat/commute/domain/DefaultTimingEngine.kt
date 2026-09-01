@@ -31,7 +31,7 @@ class DefaultTimingEngine : TimingEngine {
         if (state.nextCheckpointIndex == 0) return processEndpoint(state, fix, ordered.first(), emptyList())
         if (previous == null) return EngineTransition(state.copy(previousFix = fix))
 
-        val routeBearing = Geometry.bearingDegrees(
+        val routeBearing = Geometry.axisAlignedRouteBearing(
             ordered.first().latitude, ordered.first().longitude,
             ordered.last().latitude, ordered.last().longitude,
         )
@@ -210,7 +210,7 @@ class DefaultTimingEngine : TimingEngine {
     }
 
     companion object {
-        const val TIMING_ENGINE_VERSION = 2
+        const val TIMING_ENGINE_VERSION = 3
         private const val REQUIRED_BEYOND_FIXES = 3
         private const val REQUIRED_DEPTH_METERS = 25.0
     }

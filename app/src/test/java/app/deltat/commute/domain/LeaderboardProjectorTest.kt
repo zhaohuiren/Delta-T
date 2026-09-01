@@ -15,7 +15,7 @@ class LeaderboardProjectorTest {
         assertEquals(listOf(0L, 0L, 10L), ranked.map { it.gapToLeaderNanos })
     }
 
-    @Test fun theoreticalBestUsesIndependentV2SectorsOnly() {
+    @Test fun theoreticalBestUsesIndependentCurrentEngineSectorsOnly() {
         val rows = listOf(
             LeaderboardLap("legacy", 70, listOf(5, 5, 5), 0, timingEngineVersion = 1),
             LeaderboardLap("one", 100, listOf(20, 40, 40), 1),
@@ -25,7 +25,7 @@ class LeaderboardProjectorTest {
         assertEquals(75L, LeaderboardProjector.theoreticalBestNanos(rows))
     }
 
-    @Test fun theoreticalBestIsUnavailableWhenAnyV2SectorIsMissing() {
+    @Test fun theoreticalBestIsUnavailableWhenAnyCurrentEngineSectorIsMissing() {
         val rows = listOf(
             LeaderboardLap("one", 100, listOf(20, null, 40), 1),
             LeaderboardLap("two", 110, listOf(30, null, 35), 2),

@@ -1,2 +1,6 @@
 -keep class app.deltat.commute.data.** { *; }
 -keepattributes *Annotation*
+-keep class com.amap.api.** { *; }
+-keep class com.autonavi.** { *; }
+-dontwarn com.amap.api.**
+-dontwarn com.autonavi.**

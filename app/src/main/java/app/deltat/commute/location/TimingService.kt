@@ -143,6 +143,7 @@ class TimingService : Service() {
         routeName = candidate.routeName
         checkpoints = candidate.checkpoints
         benchmarks = repository.comparisonBenchmarksForTiming(candidate.routeId)
+        val routeSourceTrack = repository.routeSourceTrack(candidate.routeId).map(::toFix)
         engineState = EngineState()
         monthlyProgress.reset()
         weeklyProgress.reset()
@@ -167,6 +168,8 @@ class TimingService : Service() {
                 lastFix = detectionFix,
                 deltaReferenceType = if (benchmarks?.monthlyTotal != null) DeltaReferenceType.MONTHLY_BEST else DeltaReferenceType.NONE,
                 referenceTrack = benchmarks?.monthlyTotal?.track?.map(::toFix).orEmpty(),
+                routeSourceTrack = routeSourceTrack,
+                routeCheckpoints = candidate.checkpoints.sortedBy { checkpoint -> checkpoint.orderIndex },
                 checkpointPassElapsedNanos = benchmarks?.monthlyTotal?.passes?.map { pass -> pass.passElapsedNanos }.orEmpty(),
                 monthlyReferenceTrack = benchmarks?.monthlyTotal?.track?.map(::toFix).orEmpty(),
                 monthlyReferencePassElapsedNanos = benchmarks?.monthlyTotal?.passes?.map { pass -> pass.passElapsedNanos }.orEmpty(),

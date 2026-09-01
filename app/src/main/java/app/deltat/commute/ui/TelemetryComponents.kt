@@ -41,6 +41,9 @@ import app.deltat.commute.domain.CheckpointSelection
 import app.deltat.commute.domain.Geometry
 import app.deltat.commute.domain.LocationFix
 import app.deltat.commute.domain.ResultColor
+import app.deltat.commute.map.MapCameraPolicy
+import app.deltat.commute.map.MapCheckpoint
+import app.deltat.commute.map.MapScene
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -66,46 +69,26 @@ fun TelemetryRoute(
     points: List<LocationFix>,
     modifier: Modifier = Modifier,
     referencePoints: List<LocationFix> = emptyList(),
+    routeSourcePoints: List<LocationFix> = emptyList(),
+    checkpoints: List<Checkpoint> = emptyList(),
+    currentFix: LocationFix? = points.lastOrNull(),
     referencePassElapsedNanos: List<Long> = emptyList(),
     actualPassElapsedNanos: List<Long> = emptyList(),
     sectorColors: List<ResultColor> = emptyList(),
+    cameraPolicy: MapCameraPolicy = MapCameraPolicy.FULL_ROUTE_LOCKED,
 ) {
-    val all = referencePoints + points
-    Box(modifier.background(Color(0xFF090C0F), CutCornerShape(topEnd = 14.dp)), contentAlignment = Alignment.Center) {
-        if (all.size < 2) {
-            Text("尚无轨迹", color = Muted, fontSize = 13.sp)
-        } else Canvas(Modifier.fillMaxSize().padding(14.dp)) {
-            val bounds = routeBounds(all)
-            val reference = projectFixes(referencePoints, size, bounds)
-            val actual = projectFixes(points, size, bounds)
-            drawRoutePath(reference, Color(0xFF41474D), 2f)
-            if (actual.size >= 2) {
-                actual.zipWithNext().forEachIndexed { index, (a, b) ->
-                    val elapsed = points[index + 1].elapsedRealtimeNanos
-                    val color = segmentColor(elapsed, actualPassElapsedNanos, sectorColors)
-                    drawLine(color, a, b, strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
-                }
-            }
-            referencePassElapsedNanos.forEach { time ->
-                val pointIndex = referencePoints.indices.minByOrNull {
-                    kotlin.math.abs(referencePoints[it].elapsedRealtimeNanos - time)
-                } ?: return@forEach
-                drawCircle(Color(0xFF090C0F), 5.dp.toPx(), reference[pointIndex])
-                drawCircle(Color(0xFF6E757C), 5.dp.toPx(), reference[pointIndex], style = Stroke(1.5.dp.toPx()))
-            }
-            actualPassElapsedNanos.forEach { time ->
-                val pointIndex = points.indices.minByOrNull {
-                    kotlin.math.abs(points[it].elapsedRealtimeNanos - time)
-                } ?: return@forEach
-                drawCircle(TelemetryWhite, 6.dp.toPx(), actual[pointIndex])
-                drawCircle(Color.Black, 6.dp.toPx(), actual[pointIndex], style = Stroke(1.2.dp.toPx()))
-            }
-            if (actual.isNotEmpty()) {
-                drawCircle(RacingRed, 6.5.dp.toPx(), actual.last())
-                drawCircle(Color.Black, 6.5.dp.toPx(), actual.last(), style = Stroke(1.2.dp.toPx()))
-            }
-        }
-    }
+    RouteMap(
+        scene = MapScene(
+            routeSourceTrack = routeSourcePoints.ifEmpty { referencePoints },
+            actualTrack = points,
+            checkpoints = checkpoints.map(MapCheckpoint::from),
+            currentFix = currentFix,
+            actualPassElapsedNanos = actualPassElapsedNanos,
+            sectorColors = sectorColors,
+            cameraPolicy = cameraPolicy,
+        ),
+        modifier = modifier,
+    )
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRoutePath(points: List<Offset>, color: Color, widthDp: Float) {
