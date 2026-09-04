@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -38,7 +39,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val repository: AppRepository = (application as DeltaTApplication).repository
     val routes: StateFlow<List<RouteProfileEntity>> = repository.routes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val sessions: StateFlow<List<SessionListRow>> = repository.sessions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val leaderboard: StateFlow<List<LeaderboardRow>> = repository.leaderboard.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val leaderboard: StateFlow<List<LeaderboardRow>?> = repository.leaderboard
+        .map<List<LeaderboardRow>, List<LeaderboardRow>?> { it }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun agreeToAmapPrivacy() {
         if (!mapAvailable) return

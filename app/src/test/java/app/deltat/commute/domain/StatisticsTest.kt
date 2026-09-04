@@ -76,6 +76,19 @@ class StatisticsTest {
         assertTrue(weeks.single().periodEndInclusive == LocalDate.of(2026, 9, 6))
     }
 
+    @Test fun tripGapSeriesUsesEveryTripAndFastestAsZeroInStableDateOrder() {
+        val rows = listOf(
+            result("late", millis(2026, 9, 2, 12), 130),
+            result("same-day-b", millis(2026, 9, 1, 12), 100),
+            result("same-day-a", millis(2026, 9, 1, 12), 110),
+        )
+
+        val points = StatisticsAggregator.tripGapSeries(rows)
+
+        assertEquals(listOf("same-day-a", "same-day-b", "late"), points.map { it.sessionId })
+        assertEquals(listOf(10L, 0L, 30L), points.map { it.gapNanos })
+    }
+
     private fun result(id: String, started: Long, duration: Long) = TimedResultSummary(id, started, duration)
 
     private fun millis(year: Int, month: Int, day: Int, hour: Int): Long =

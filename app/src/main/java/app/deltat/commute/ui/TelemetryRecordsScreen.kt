@@ -7,15 +7,20 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -26,49 +31,81 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import app.deltat.commute.data.LeaderboardRow
 import app.deltat.commute.data.RouteProfileEntity
-import app.deltat.commute.data.SessionListRow
 import app.deltat.commute.data.comparisonPeriodBounds
 import app.deltat.commute.domain.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
 import java.util.Date
 import java.util.Locale
 
 private enum class RecordsTab(val title: String) { LEADERBOARD("排行榜"), MONTH("月统计"), WEEK("周统计") }
+private data class RecordBadges(val monthlyBest: Boolean = false, val weeklyBest: Boolean = false)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TelemetryRecordsScreen(
     routes: List<RouteProfileEntity>,
-    sessions: List<SessionListRow>,
-    leaderboard: List<LeaderboardRow> = emptyList(),
+    leaderboard: List<LeaderboardRow>?,
     onOpenSession: (String) -> Unit,
 ) {
     val displayRoutes = remember(routes) { routesForRecords(routes) }
-    var selectedRouteId by remember(displayRoutes) { mutableStateOf(displayRoutes.firstOrNull()?.id) }
-    var tab by remember { mutableStateOf(RecordsTab.LEADERBOARD) }
-    var filter by remember { mutableStateOf<LeaderboardPeriodFilter>(LeaderboardPeriodFilter.ThisMonth) }
-    var customRange by remember { mutableStateOf<LeaderboardPeriodFilter.Custom?>(null) }
-    var showDateRange by remember { mutableStateOf(false) }
-
-    val allRows = remember(selectedRouteId, leaderboard, sessions, routes) {
-        val projected = if (leaderboard.isNotEmpty()) leaderboard else sessions.mapNotNull { row ->
-            val route = routes.firstOrNull { it.id == row.routeProfileId }
-            row.totalDurationNanos?.takeIf {
-                row.validity == "VALID" && row.qualityGrade in setOf("A", "B") && row.checkpointVersionId == route?.activeCheckpointVersionId
-            }?.let { duration ->
-                LeaderboardRow(
-                    row.id, row.routeProfileId, row.routeName, row.startedWallTimeMillis, duration, row.qualityGrade,
-                    null, null, null, row.timingEngineVersion, row.missingCheckpointMask,
-                )
-            }
-        }
-        projected.filter { it.routeProfileId == selectedRouteId }
+    var selectedRouteId by rememberSaveable { mutableStateOf<String?>(null) }
+    var tabName by rememberSaveable { mutableStateOf(RecordsTab.LEADERBOARD.name) }
+    var filterName by rememberSaveable { mutableStateOf("MONTH") }
+    var customStartIso by rememberSaveable { mutableStateOf<String?>(null) }
+    var customEndIso by rememberSaveable { mutableStateOf<String?>(null) }
+    var showDateRange by rememberSaveable { mutableStateOf(false) }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val tab = RecordsTab.entries.firstOrNull { it.name == tabName } ?: RecordsTab.LEADERBOARD
+    val customRange = remember(customStartIso, customEndIso) {
+        runCatching {
+            val start = LocalDate.parse(customStartIso)
+            val end = LocalDate.parse(customEndIso)
+            LeaderboardPeriodFilter.Custom(start, end)
+        }.getOrNull()
     }
-    val periodRange = remember(filter) { StatisticsAggregator.range(filter) }
+    val filter: LeaderboardPeriodFilter = when (filterName) {
+        "WEEK" -> LeaderboardPeriodFilter.ThisWeek
+        "ALL" -> LeaderboardPeriodFilter.All
+        "CUSTOM" -> customRange ?: LeaderboardPeriodFilter.ThisMonth
+        else -> LeaderboardPeriodFilter.ThisMonth
+    }
+    LaunchedEffect(displayRoutes) {
+        if (displayRoutes.none { it.id == selectedRouteId }) selectedRouteId = displayRoutes.firstOrNull()?.id
+    }
+
+    var calendarNowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) calendarNowMillis = System.currentTimeMillis()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = System.currentTimeMillis()
+            val zone = ZoneId.systemDefault()
+            val nextDay = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().plusDays(1)
+                .atStartOfDay(zone).toInstant().toEpochMilli()
+            delay((nextDay - now + 250L).coerceAtLeast(1_000L))
+            calendarNowMillis = System.currentTimeMillis()
+        }
+    }
+
+    val allRows = remember(selectedRouteId, leaderboard) {
+        leaderboard.orEmpty().filter { it.routeProfileId == selectedRouteId }
+    }
+    val periodRange = remember(filter, calendarNowMillis) { StatisticsAggregator.range(filter, calendarNowMillis) }
     val rankedRows = remember(allRows, periodRange) {
         allRows.filter { periodRange.contains(it.startedWallTimeMillis) }
             .sortedWith(compareBy<LeaderboardRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.sessionId })
@@ -86,26 +123,26 @@ fun TelemetryRecordsScreen(
     val timedResults = remember(allRows) { allRows.map { TimedResultSummary(it.sessionId, it.startedWallTimeMillis, it.totalDurationNanos) } }
     val monthly = remember(timedResults) { StatisticsAggregator.monthly(timedResults) }
     val weekly = remember(timedResults) { StatisticsAggregator.weekly(timedResults) }
-    val resultColors = remember(allRows) {
-        val bounds = comparisonPeriodBounds(System.currentTimeMillis())
+    val tripGaps = remember(timedResults) { StatisticsAggregator.tripGapSeries(timedResults) }
+    val recordBadges = remember(allRows, calendarNowMillis) {
+        val bounds = comparisonPeriodBounds(calendarNowMillis)
         val monthBest = allRows.filter { it.startedWallTimeMillis in bounds.monthStartMillis until bounds.endExclusiveMillis }
             .minWithOrNull(compareBy<LeaderboardRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.sessionId })?.sessionId
         val weekBest = allRows.filter { it.startedWallTimeMillis in bounds.weekStartMillis until bounds.endExclusiveMillis }
             .minWithOrNull(compareBy<LeaderboardRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.sessionId })?.sessionId
-        allRows.associate { row ->
-            row.sessionId to when (row.sessionId) {
-                monthBest -> ResultColor.PURPLE
-                weekBest -> ResultColor.GREEN
-                else -> ResultColor.YELLOW
-            }
-        }
+        allRows.associate { row -> row.sessionId to RecordBadges(row.sessionId == monthBest, row.sessionId == weekBest) }
     }
 
     if (showDateRange) {
         DateRangeDialog(
             initial = customRange,
             onDismiss = { showDateRange = false },
-            onConfirm = { selected -> customRange = selected; filter = selected; showDateRange = false },
+            onConfirm = { selected ->
+                customStartIso = selected.startDate.toString()
+                customEndIso = selected.endDateInclusive.toString()
+                filterName = "CUSTOM"
+                showDateRange = false
+            },
         )
     }
 
@@ -113,29 +150,41 @@ fun TelemetryRecordsScreen(
         Column(Modifier.fillMaxSize()) {
             Text("个人纪录", fontSize = 27.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp))
             LazyColumn(
+                state = listState,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(13.dp),
             ) {
                 item {
-                    if (displayRoutes.isNotEmpty()) RouteSelector(displayRoutes.take(4), selectedRouteId) { selectedRouteId = it }
+                    if (displayRoutes.isNotEmpty()) RouteSelector(displayRoutes, selectedRouteId) { selectedRouteId = it }
                 }
                 item {
-                    RecordsTabs(tab) { tab = it }
+                    RecordsTabs(tab) { tabName = it.name }
                 }
                 if (displayRoutes.isEmpty()) item { RecordsEmpty("请先建立路线并完成有效行程") }
+                else if (leaderboard == null) item { RecordsEmpty("正在加载有效成绩…") }
                 else when (tab) {
                     RecordsTab.LEADERBOARD -> leaderboardContent(
                         rows = rankedRows,
                         theoreticalBest = theoreticalBest,
-                        resultColors = resultColors,
+                        recordBadges = recordBadges,
                         filter = filter,
                         onFilter = { selected ->
-                            if (selected == null) showDateRange = true else filter = selected
+                            when (selected) {
+                                null -> showDateRange = true
+                                LeaderboardPeriodFilter.ThisWeek -> filterName = "WEEK"
+                                LeaderboardPeriodFilter.ThisMonth -> filterName = "MONTH"
+                                LeaderboardPeriodFilter.All -> filterName = "ALL"
+                                is LeaderboardPeriodFilter.Custom -> {
+                                    customStartIso = selected.startDate.toString()
+                                    customEndIso = selected.endDateInclusive.toString()
+                                    filterName = "CUSTOM"
+                                }
+                            }
                         },
                         onOpenSession = onOpenSession,
                     )
-                    RecordsTab.MONTH -> aggregateContent(monthly, monthly = true)
-                    RecordsTab.WEEK -> aggregateContent(weekly, monthly = false)
+                    RecordsTab.MONTH -> aggregateContent(monthly, tripGaps, monthly = true)
+                    RecordsTab.WEEK -> aggregateContent(weekly, tripGaps, monthly = false)
                 }
             }
         }
@@ -145,7 +194,7 @@ fun TelemetryRecordsScreen(
 private fun androidx.compose.foundation.lazy.LazyListScope.leaderboardContent(
     rows: List<LeaderboardRow>,
     theoreticalBest: Long?,
-    resultColors: Map<String, ResultColor>,
+    recordBadges: Map<String, RecordBadges>,
     filter: LeaderboardPeriodFilter,
     onFilter: (LeaderboardPeriodFilter?) -> Unit,
     onOpenSession: (String) -> Unit,
@@ -165,13 +214,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.leaderboardContent(
             position = index + 1,
             row = row,
             gap = row.totalDurationNanos - rows.first().totalDurationNanos,
-            resultColor = resultColors[row.sessionId] ?: ResultColor.YELLOW,
+            badges = recordBadges[row.sessionId] ?: RecordBadges(),
             onClick = { onOpenSession(row.sessionId) },
         )
     }
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.aggregateContent(rows: List<PeriodAggregate>, monthly: Boolean) {
+private fun androidx.compose.foundation.lazy.LazyListScope.aggregateContent(rows: List<PeriodAggregate>, tripGaps: List<TripGapPoint>, monthly: Boolean) {
     val latest = rows.lastOrNull()
     item {
         Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(18.dp)) {
@@ -189,7 +238,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.aggregateContent(rows
     }
     if (rows.isEmpty()) item { RecordsEmpty(if (monthly) "还没有月统计数据" else "还没有周统计数据") }
     else {
-        item { PeriodTrendChart(rows, monthly, Modifier.fillMaxWidth().height(220.dp)) }
+        item { TripGapTrendChart(tripGaps, Modifier.fillMaxWidth().height(250.dp)) }
         itemsIndexed(rows.asReversed(), key = { _, row -> row.periodStart.toString() }) { _, row -> PeriodAggregateCard(row, monthly) }
     }
 }
@@ -234,8 +283,7 @@ private fun RecordMetricInline(label: String, value: String, modifier: Modifier)
 }
 
 @Composable
-private fun LeaderboardCard(position: Int, row: LeaderboardRow, gap: Long, resultColor: ResultColor, onClick: () -> Unit) {
-    val accent = telemetryColor(resultColor)
+private fun LeaderboardCard(position: Int, row: LeaderboardRow, gap: Long, badges: RecordBadges, onClick: () -> Unit) {
     Card(
         Modifier.fillMaxWidth().testTag("leaderboard-P$position").clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = Surface),
@@ -243,20 +291,17 @@ private fun LeaderboardCard(position: Int, row: LeaderboardRow, gap: Long, resul
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("P$position", color = accent, fontSize = if (position == 1) 28.sp else 23.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(62.dp))
+                Text("P$position", color = TelemetryWhite, fontSize = if (position == 1) 28.sp else 23.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(62.dp))
                 Column(Modifier.weight(1f)) {
                     Text(formatRecordDuration(row.totalDurationNanos), fontFamily = FontFamily.Monospace, fontSize = if (position == 1) 25.sp else 21.sp, fontWeight = FontWeight.Bold)
                     Text(if (position == 1) "GAP —" else "GAP +${formatRecordDuration(gap)}", color = Muted, fontSize = 12.sp)
                 }
-                Text(
-                    when (resultColor) {
-                        ResultColor.PURPLE -> "PB · 本月最快 · 质量 ${row.qualityGrade}"
-                        ResultColor.GREEN -> "本周最快 · 质量 ${row.qualityGrade}"
-                        else -> "质量 ${row.qualityGrade}"
-                    },
-                    color = accent,
-                    fontSize = 12.sp,
-                )
+                Text("质量 ${row.qualityGrade}", color = Muted, fontSize = 12.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (position == 1) RecordIdentityTag("PB", TelemetryWhite)
+                if (badges.monthlyBest) RecordIdentityTag("本月最快", Purple)
+                if (badges.weeklyBest) RecordIdentityTag("本周最快", Green)
             }
             HorizontalDivider(color = Color(0xFF343A40))
             Row {
@@ -268,6 +313,17 @@ private fun LeaderboardCard(position: Int, row: LeaderboardRow, gap: Long, resul
             if (row.missingCheckpointMask != 0) Text("总程有效 · 部分检查点缺失", color = Yellow, fontSize = 12.sp)
         }
     }
+}
+
+@Composable
+private fun RecordIdentityTag(text: String, color: Color) {
+    Text(
+        text,
+        color = color,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.background(color.copy(alpha = .13f), RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 3.dp),
+    )
 }
 
 @Composable
@@ -293,33 +349,60 @@ private fun PeriodAggregateCard(row: PeriodAggregate, monthly: Boolean) {
 }
 
 @Composable
-private fun PeriodTrendChart(rows: List<PeriodAggregate>, monthly: Boolean, modifier: Modifier) {
+private fun TripGapTrendChart(rows: List<TripGapPoint>, modifier: Modifier) {
+    val coordinates = remember(rows) { tripGapChartCoordinates(rows) }
+    val description = remember(rows) {
+        if (rows.isEmpty()) "日期与相对最快成绩差值趋势图，无有效行程"
+        else rows.joinToString(prefix = "日期与相对最快成绩差值趋势图：", separator = "；") { row ->
+            "${formatRecordDateOnly(row.startedWallTimeMillis)}，${formatRecordGap(row.gapNanos)}"
+        }
+    }
     Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(16.dp), modifier = modifier) {
         Column(Modifier.padding(16.dp)) {
-            Text("平均用时趋势", fontWeight = FontWeight.Bold)
-            Canvas(Modifier.fillMaxSize().padding(top = 16.dp, start = 4.dp, end = 4.dp, bottom = 4.dp)) {
+            Text("行程 GAP 趋势", fontWeight = FontWeight.Bold)
+            Text("纵轴 GAP（相对当前范围最快） · 横轴日期", color = Muted, fontSize = 11.sp)
+            Canvas(
+                Modifier.fillMaxSize().padding(top = 10.dp).testTag("trip-gap-chart")
+                    .semantics { contentDescription = description },
+            ) {
                 if (rows.isEmpty()) return@Canvas
-                val durations = rows.map { it.averageDurationNanos }
-                val min = durations.minOrNull()!!.toFloat()
-                val max = durations.maxOrNull()!!.toFloat()
-                val span = (max - min).coerceAtLeast(1f)
-                val totalSlots = if (monthly) {
-                    ChronoUnit.MONTHS.between(rows.first().periodStart.withDayOfMonth(1), rows.last().periodStart.withDayOfMonth(1)).toInt() + 1
-                } else ChronoUnit.WEEKS.between(rows.first().periodStart, rows.last().periodStart).toInt() + 1
-                val offsets = rows.map { row ->
-                    val slot = if (monthly) ChronoUnit.MONTHS.between(rows.first().periodStart.withDayOfMonth(1), row.periodStart.withDayOfMonth(1)).toInt()
-                    else ChronoUnit.WEEKS.between(rows.first().periodStart, row.periodStart).toInt()
+                val left = 54.dp.toPx()
+                val right = 8.dp.toPx()
+                val top = 8.dp.toPx()
+                val bottom = 28.dp.toPx()
+                val chartWidth = (size.width - left - right).coerceAtLeast(1f)
+                val chartHeight = (size.height - top - bottom).coerceAtLeast(1f)
+                val maxGap = rows.maxOf { it.gapNanos }.coerceAtLeast(1L)
+                val firstTime = rows.first().startedWallTimeMillis
+                val lastTime = rows.last().startedWallTimeMillis
+                val axis = Color(0xFF5D626A)
+                drawLine(axis, Offset(left, top), Offset(left, top + chartHeight), 1.dp.toPx())
+                drawLine(axis, Offset(left, top + chartHeight), Offset(left + chartWidth, top + chartHeight), 1.dp.toPx())
+                val labelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.rgb(153, 160, 168)
+                    textSize = 10.sp.toPx()
+                }
+                fun gapLabel(value: Long): String = if (value < 60_000_000_000L) {
+                    "+%.1fs".format(Locale.US, value / 1_000_000_000.0)
+                } else "+${formatRecordDuration(value)}"
+                listOf(0f, .5f, 1f).forEach { ratio ->
+                    val y = top + chartHeight * (1f - ratio)
+                    drawLine(axis.copy(alpha = .35f), Offset(left, y), Offset(left + chartWidth, y), .5.dp.toPx())
+                    drawContext.canvas.nativeCanvas.drawText(gapLabel((maxGap * ratio).toLong()), 0f, y + 4.dp.toPx(), labelPaint)
+                }
+                val offsets = coordinates.map { point ->
                     Offset(
-                        x = if (totalSlots == 1) size.width / 2 else size.width * slot / (totalSlots - 1),
-                        y = size.height - (row.averageDurationNanos.toFloat() - min) / span * size.height,
+                        x = left + chartWidth * point.xFraction,
+                        y = top + chartHeight * point.yFraction,
                     )
                 }
-                offsets.zipWithNext().forEachIndexed { index, (a, b) ->
-                    val gap = if (monthly) ChronoUnit.MONTHS.between(rows[index].periodStart.withDayOfMonth(1), rows[index + 1].periodStart.withDayOfMonth(1))
-                    else ChronoUnit.WEEKS.between(rows[index].periodStart, rows[index + 1].periodStart)
-                    if (gap == 1L) drawLine(if (monthly) Purple else Green, a, b, strokeWidth = 3.dp.toPx())
-                }
-                offsets.forEach { point -> drawCircle(if (monthly) Purple else Green, 5.dp.toPx(), point); drawCircle(Color.White, 2.dp.toPx(), point) }
+                offsets.zipWithNext().forEach { (a, b) -> drawLine(Purple, a, b, strokeWidth = 2.5.dp.toPx()) }
+                offsets.forEach { point -> drawCircle(Purple, 4.5.dp.toPx(), point); drawCircle(Color.White, 1.8.dp.toPx(), point) }
+                val dateFormat = SimpleDateFormat("MM-dd", Locale.CHINA)
+                labelPaint.textAlign = android.graphics.Paint.Align.LEFT
+                drawContext.canvas.nativeCanvas.drawText(dateFormat.format(Date(firstTime)), left, size.height - 3.dp.toPx(), labelPaint)
+                labelPaint.textAlign = android.graphics.Paint.Align.RIGHT
+                drawContext.canvas.nativeCanvas.drawText(dateFormat.format(Date(lastTime)), left + chartWidth, size.height - 3.dp.toPx(), labelPaint)
             }
         }
     }
@@ -328,22 +411,43 @@ private fun PeriodTrendChart(rows: List<PeriodAggregate>, monthly: Boolean, modi
 @Composable
 private fun RouteSelector(routes: List<RouteProfileEntity>, selectedRouteId: String?, onSelect: (String) -> Unit) {
     val outer = RoundedCornerShape(28.dp)
-    Row(Modifier.fillMaxWidth().height(52.dp).clip(outer).border(1.dp, Color(0xFF5D626A), outer)) {
-        routes.forEachIndexed { index, route ->
-            val selected = selectedRouteId == route.id
-            Row(
-                Modifier.weight(1f).fillMaxHeight()
-                    .background(if (selected) Color(0xFF5C171D) else Color(0xFF090B0E))
-                    .then(if (index > 0) Modifier.border(width = 0.5.dp, color = Color(0xFF5D626A)) else Modifier)
-                    .testTag("route-option-${route.id}").semantics { this.selected = selected }
-                    .clickable { onSelect(route.id) },
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (selected) { Text("✓", color = Color.White, fontSize = 17.sp); Spacer(Modifier.width(8.dp)) }
-                Text(route.name, color = if (selected) Color.White else TelemetryWhite.copy(alpha = .85f), maxLines = 1, fontSize = 16.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+    if (routes.size <= 4) {
+        Row(Modifier.fillMaxWidth().height(52.dp).clip(outer).border(1.dp, Color(0xFF5D626A), outer)) {
+            routes.forEachIndexed { index, route ->
+                RouteOption(route, selectedRouteId == route.id, index > 0, Modifier.weight(1f)) { onSelect(route.id) }
             }
         }
+    } else {
+        Box(Modifier.fillMaxWidth().height(52.dp).clip(outer).border(1.dp, Color(0xFF5D626A), outer)) {
+            Row(Modifier.fillMaxHeight().horizontalScroll(rememberScrollState())) {
+                routes.forEachIndexed { index, route ->
+                    RouteOption(route, selectedRouteId == route.id, index > 0, Modifier.widthIn(min = 112.dp, max = 160.dp)) { onSelect(route.id) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RouteOption(route: RouteProfileEntity, selected: Boolean, divider: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Row(
+        modifier.fillMaxHeight()
+            .background(if (selected) Color(0xFF5C171D) else Color(0xFF090B0E))
+            .then(if (divider) Modifier.border(width = 0.5.dp, color = Color(0xFF5D626A)) else Modifier)
+            .testTag("route-option-${route.id}").semantics { this.selected = selected }
+            .clickable(onClick = onClick).padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (selected) { Text("✓", color = Color.White, fontSize = 17.sp); Spacer(Modifier.width(8.dp)) }
+        Text(
+            route.name,
+            color = if (selected) Color.White else TelemetryWhite.copy(alpha = .85f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontSize = 16.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        )
     }
 }
 
@@ -373,10 +477,9 @@ private fun RecordsTabs(selected: RecordsTab, onSelect: (RecordsTab) -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DateRangeDialog(initial: LeaderboardPeriodFilter.Custom?, onDismiss: () -> Unit, onConfirm: (LeaderboardPeriodFilter.Custom) -> Unit) {
-    val zone = ZoneId.systemDefault()
     val state = rememberDateRangePickerState(
-        initialSelectedStartDateMillis = initial?.startDate?.atStartOfDay(zone)?.toInstant()?.toEpochMilli(),
-        initialSelectedEndDateMillis = initial?.endDateInclusive?.atStartOfDay(zone)?.toInstant()?.toEpochMilli(),
+        initialSelectedStartDateMillis = initial?.startDate?.let(::localDateToDatePickerMillis),
+        initialSelectedEndDateMillis = initial?.endDateInclusive?.let(::localDateToDatePickerMillis),
     )
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(24.dp), color = Surface, modifier = Modifier.fillMaxWidth()) {
@@ -388,8 +491,8 @@ private fun DateRangeDialog(initial: LeaderboardPeriodFilter.Custom?, onDismiss:
                     TextButton(
                         enabled = state.selectedStartDateMillis != null && state.selectedEndDateMillis != null,
                         onClick = {
-                            val start = Instant.ofEpochMilli(requireNotNull(state.selectedStartDateMillis)).atZone(zone).toLocalDate()
-                            val end = Instant.ofEpochMilli(requireNotNull(state.selectedEndDateMillis)).atZone(zone).toLocalDate()
+                            val start = datePickerMillisToLocalDate(requireNotNull(state.selectedStartDateMillis))
+                            val end = datePickerMillisToLocalDate(requireNotNull(state.selectedEndDateMillis))
                             onConfirm(LeaderboardPeriodFilter.Custom(start, end))
                         },
                     ) { Text("应用") }
@@ -420,9 +523,41 @@ private fun periodLabel(row: PeriodAggregate, monthly: Boolean): String = if (mo
     "${row.periodStart.format(DateTimeFormatter.ofPattern("M月d日"))}–${row.periodEndInclusive.format(DateTimeFormatter.ofPattern("M月d日"))}"
 }
 
-private fun formatRecordDuration(nanos: Long): String {
+internal fun formatRecordDuration(nanos: Long): String {
     val hundredths = nanos / 10_000_000
-    return "%02d:%02d.%02d".format(hundredths / 6_000, (hundredths / 100) % 60, hundredths % 100)
+    val hours = hundredths / 360_000
+    val minutes = (hundredths / 6_000) % 60
+    val seconds = (hundredths / 100) % 60
+    return if (hours > 0) "%d:%02d:%02d.%02d".format(hours, minutes, seconds, hundredths % 100)
+    else "%02d:%02d.%02d".format(minutes, seconds, hundredths % 100)
 }
 
 private fun formatRecordDate(millis: Long): String = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(millis))
+private fun formatRecordDateOnly(millis: Long): String = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(millis))
+private fun formatRecordGap(nanos: Long): String = if (nanos == 0L) "GAP 0" else "GAP +${formatRecordDuration(nanos)}"
+
+internal fun localDateToDatePickerMillis(date: LocalDate): Long =
+    date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+internal fun datePickerMillisToLocalDate(millis: Long): LocalDate =
+    Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
+
+internal data class TripGapChartCoordinate(
+    val sessionId: String,
+    val xFraction: Float,
+    val yFraction: Float,
+)
+
+internal fun tripGapChartCoordinates(rows: List<TripGapPoint>): List<TripGapChartCoordinate> {
+    if (rows.isEmpty()) return emptyList()
+    val first = rows.first().startedWallTimeMillis
+    val span = (rows.last().startedWallTimeMillis - first).coerceAtLeast(1L)
+    val maxGap = rows.maxOf { it.gapNanos }.coerceAtLeast(1L)
+    return rows.map { row ->
+        TripGapChartCoordinate(
+            sessionId = row.sessionId,
+            xFraction = ((row.startedWallTimeMillis - first).toDouble() / span).toFloat().coerceIn(0f, 1f),
+            yFraction = (1.0 - row.gapNanos.toDouble() / maxGap).toFloat().coerceIn(0f, 1f),
+        )
+    }
+}

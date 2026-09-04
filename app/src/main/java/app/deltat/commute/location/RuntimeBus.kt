@@ -9,6 +9,7 @@ import app.deltat.commute.domain.LocationFix
 import app.deltat.commute.domain.ResultColor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 data class RuntimeSector(
     val index: Int,
@@ -58,12 +59,14 @@ data class RuntimeSnapshot(
     val gnssHealth: GnssHealth = GnssHealth(),
     val lastFix: LocationFix? = null,
     val track: List<LocationFix> = emptyList(),
+    val pendingFixCount: Int = 0,
+    val droppedFixCount: Long = 0,
     val error: String? = null,
 )
 
 object RuntimeBus {
     private val mutable = MutableStateFlow(RuntimeSnapshot())
     val state = mutable.asStateFlow()
-    fun update(transform: (RuntimeSnapshot) -> RuntimeSnapshot) { mutable.value = transform(mutable.value) }
+    fun update(transform: (RuntimeSnapshot) -> RuntimeSnapshot) { mutable.update(transform) }
     fun reset(error: String? = null) { mutable.value = RuntimeSnapshot(error = error) }
 }

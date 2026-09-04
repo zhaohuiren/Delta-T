@@ -172,7 +172,7 @@ interface DeltaTDao {
                CASE WHEN r.referenceSessionId = s.id THEN 1 ELSE 0 END AS isCurrentReference
         FROM sessions s JOIN route_profiles r ON r.id = s.routeProfileId
         LEFT JOIN session_evaluations e ON e.sessionId = s.id AND e.checkpointVersionId = r.activeCheckpointVersionId
-        ORDER BY s.startedWallTimeMillis DESC
+        ORDER BY s.startedWallTimeMillis DESC, s.createdAtMillis DESC, s.id DESC
     """)
     fun observeSessionList(): Flow<List<SessionListRow>>
 

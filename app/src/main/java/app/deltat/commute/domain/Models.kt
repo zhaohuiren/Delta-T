@@ -141,12 +141,88 @@ data class GnssHealth(
     val usedOther: Int = 0,
     val label: String = "正在定位",
     val locationEnabled: Boolean = true,
+    val satelliteStatusReceived: Boolean = false,
 ) {
     val visibleTotal: Int get() = visibleGps + visibleBeidou + visibleOther
     val usedTotal: Int get() = usedGps + usedBeidou + usedOther
     fun displayLabel(): String = when {
         !locationEnabled -> "定位已关闭"
-        visibleTotal == 0 -> "卫星 0/0 · 正在搜星"
-        else -> "卫星 $usedTotal/$visibleTotal"
+        label != "正在定位" -> label
+        visibleTotal == 0 || usedTotal == 0 -> "GPS 搜星中"
+        usedTotal >= 8 -> "GPS 良好"
+        usedTotal >= 4 -> "GPS 一般"
+        else -> "GPS 弱"
+    }
+
+    /** Status hysteresis is independent of the latest physical-satellite counts. */
+    fun displaySummary(): String {
+        if (!locationEnabled) return displayLabel()
+        val known = satelliteStatusReceived || visibleTotal > 0 || usedTotal > 0
+        val valid = visibleTotal >= 0 && usedTotal in 0..visibleTotal
+        val counts = if (known && valid) "$usedTotal/$visibleTotal" else "--/--"
+        return "${displayLabel()} · $counts"
+    }
+}
+
+enum class GnssDisplayQuality(val label: String) {
+    SEARCHING("GPS 搜星中"),
+    WEAK("GPS 弱"),
+    FAIR("GPS 一般"),
+    GOOD("GPS 良好"),
+    DISABLED("定位已关闭"),
+}
+
+/** Keeps noisy satellite membership changes from rewriting the driving UI every callback. */
+class GnssDisplayStabilizer(
+    private val worsenSamples: Int = 2,
+    private val recoverSamples: Int = 3,
+) {
+    private var current: GnssDisplayQuality? = null
+    private var candidate: GnssDisplayQuality? = null
+    private var candidateSamples = 0
+
+    fun update(health: GnssHealth): String {
+        val next = qualityFor(health)
+        val active = current
+        if (active == null || next == GnssDisplayQuality.DISABLED || active == GnssDisplayQuality.DISABLED) {
+            current = next
+            candidate = null
+            candidateSamples = 0
+            return next.label
+        }
+        if (next == active) {
+            candidate = null
+            candidateSamples = 0
+            return active.label
+        }
+        if (candidate != next) {
+            candidate = next
+            candidateSamples = 1
+        } else {
+            candidateSamples++
+        }
+        val required = if (next.ordinal < active.ordinal) worsenSamples else recoverSamples
+        if (candidateSamples >= required) {
+            current = next
+            candidate = null
+            candidateSamples = 0
+        }
+        return requireNotNull(current).label
+    }
+
+    fun reset() {
+        current = null
+        candidate = null
+        candidateSamples = 0
+    }
+
+    companion object {
+        fun qualityFor(health: GnssHealth): GnssDisplayQuality = when {
+            !health.locationEnabled -> GnssDisplayQuality.DISABLED
+            health.visibleTotal == 0 || health.usedTotal == 0 -> GnssDisplayQuality.SEARCHING
+            health.usedTotal >= 8 -> GnssDisplayQuality.GOOD
+            health.usedTotal >= 4 -> GnssDisplayQuality.FAIR
+            else -> GnssDisplayQuality.WEAK
+        }
     }
 }

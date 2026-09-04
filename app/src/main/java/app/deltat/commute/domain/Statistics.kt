@@ -30,7 +30,19 @@ data class PeriodRange(val startMillisInclusive: Long?, val endMillisExclusive: 
             (endMillisExclusive == null || wallTimeMillis < endMillisExclusive)
 }
 
+data class TripGapPoint(
+    val sessionId: String,
+    val startedWallTimeMillis: Long,
+    val gapNanos: Long,
+)
+
 object StatisticsAggregator {
+    fun tripGapSeries(results: List<TimedResultSummary>): List<TripGapPoint> {
+        val best = results.minOfOrNull { it.durationNanos } ?: return emptyList()
+        return results.sortedWith(compareBy<TimedResultSummary> { it.startedWallTimeMillis }.thenBy { it.sessionId })
+            .map { TripGapPoint(it.sessionId, it.startedWallTimeMillis, (it.durationNanos - best).coerceAtLeast(0L)) }
+    }
+
     fun range(
         filter: LeaderboardPeriodFilter,
         nowMillis: Long = System.currentTimeMillis(),

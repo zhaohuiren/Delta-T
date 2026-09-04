@@ -7,6 +7,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TimingEngineTest {
+    @Test fun mockFixNeverAdvancesTimingState() {
+        val engine = DefaultTimingEngine()
+        val mock = fix(checkpoints.first().longitude, 1).copy(isMock = true)
+
+        val transition = engine.processFix(EngineState(), mock, checkpoints)
+
+        assertEquals(EngineStatus.ARMED, transition.newState.status)
+        assertEquals(0, transition.newState.nextCheckpointIndex)
+        assertTrue(transition.emittedEvents.filterIsInstance<EngineEvent.FixRejected>().single().reason.contains("模拟定位"))
+    }
     private val engine = DefaultTimingEngine()
     private val checkpoints = (0..3).map { index ->
         Checkpoint(

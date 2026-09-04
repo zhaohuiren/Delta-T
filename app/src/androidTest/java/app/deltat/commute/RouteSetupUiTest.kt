@@ -56,7 +56,7 @@ class RouteSetupUiTest {
             runtime.value = RuntimeSnapshot(
                 sessionId = "baseline", routeId = "work", routeName = "上班",
                 mode = "BASELINE_RECORDING", status = "正在录制", elapsedNanos = 65_400_000_000,
-                gnssHealth = GnssHealth(usedGps = 6, usedBeidou = 5, label = "GNSS 良好"),
+                gnssHealth = GnssHealth(visibleGps = 12, usedGps = 6, visibleBeidou = 8, usedBeidou = 5, label = "GPS 良好"),
                 lastFix = fix(10), track = (0..10).map(::fix),
             )
         }

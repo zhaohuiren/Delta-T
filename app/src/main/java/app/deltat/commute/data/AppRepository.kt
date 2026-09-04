@@ -103,8 +103,11 @@ class AppRepository(private val database: DeltaTDatabase) {
     suspend fun checkpointsForRoute(routeId: String): List<Checkpoint> {
         val route = dao.route(routeId) ?: return emptyList()
         val version = route.activeCheckpointVersionId ?: return emptyList()
-        return dao.checkpoints(version).map { it.toDomain() }
+        return checkpointsForVersion(version)
     }
+
+    suspend fun checkpointsForVersion(versionId: String): List<Checkpoint> =
+        dao.checkpoints(versionId).map { it.toDomain() }
 
     suspend fun checkpointEntitiesForRoute(routeId: String): List<CheckpointEntity> {
         val route = dao.route(routeId) ?: return emptyList()
@@ -227,9 +230,9 @@ class AppRepository(private val database: DeltaTDatabase) {
 
     suspend fun activeSession() = dao.activeSession()
 
-    suspend fun appendFix(sessionId: String, fix: LocationFix, usedForTiming: Boolean): Long {
+    suspend fun appendFix(sessionId: String, fix: LocationFix, usedForTiming: Boolean): Long = database.withTransaction {
         val sequence = dao.nextSequence(sessionId)
-        return dao.insertTrackPoint(
+        val pointId = dao.insertTrackPoint(
             TrackPointEntity(
                 sessionId = sessionId,
                 sequence = sequence,
@@ -244,9 +247,15 @@ class AppRepository(private val database: DeltaTDatabase) {
                 bearingAccuracy = fix.bearingAccuracyDegrees,
                 provider = fix.provider,
                 isMock = fix.isMock,
-                usedForTiming = usedForTiming,
+                usedForTiming = usedForTiming && !fix.isMock,
             ),
         )
+        if (fix.isMock) {
+            dao.session(sessionId)?.takeUnless { it.isMockDetected }?.let { session ->
+                dao.updateSession(session.copy(isMockDetected = true))
+            }
+        }
+        pointId
     }
 
     suspend fun updateRuntimeStatus(sessionId: String, status: EngineStatus) {
@@ -310,7 +319,9 @@ class AppRepository(private val database: DeltaTDatabase) {
         val evaluationId = dao.evaluation(sessionId, versionId)?.id ?: UUID.randomUUID().toString()
         dao.deleteEvaluationPasses(evaluationId)
         dao.deleteEvaluationSectors(evaluationId)
+        val mockDetected = session.isMockDetected
         val grade = when {
+            mockDetected -> QualityGrade.C
             state.passes.any { it.triggerMode == TriggerMode.CLOSEST_APPROACH } -> QualityGrade.B
             state.rejectedFixes > 10 -> QualityGrade.B
             else -> QualityGrade.A
@@ -324,7 +335,7 @@ class AppRepository(private val database: DeltaTDatabase) {
             val monthlyBest = benchmarks.monthlySectorBestNanos.getOrNull(index)
             val weeklyBest = benchmarks.weeklySectorBestNanos.getOrNull(index)
             val uncertainty = maxOf(a.uncertaintyMillis, b.uncertaintyMillis)
-            val color = RecordJudge.periodColor(duration, monthlyBest, weeklyBest, grade, uncertainty)
+            val color = if (mockDetected) ResultColor.NEUTRAL else RecordJudge.periodColor(duration, monthlyBest, weeklyBest, grade, uncertainty)
             dao.insertSector(
                 SectorResultEntity(
                     sessionId = sessionId,
@@ -334,7 +345,7 @@ class AppRepository(private val database: DeltaTDatabase) {
                     previousBestDurationNanos = weeklyBest,
                     deltaToReferenceNanos = monthlyBest?.let { duration - it },
                     resultColorAtCompletion = color.name,
-                    recordQualified = grade != QualityGrade.C,
+                    recordQualified = !mockDetected && grade != QualityGrade.C,
                     monthlyBestDurationNanos = monthlyBest,
                     weeklyBestDurationNanos = weeklyBest,
                     monthlyDeltaNanos = monthlyBest?.let { duration - it },
@@ -351,7 +362,7 @@ class AppRepository(private val database: DeltaTDatabase) {
                     monthlyDeltaNanos = monthlyBest?.let { duration - it },
                     weeklyDeltaNanos = weeklyBest?.let { duration - it },
                     resultColorAtCompletion = color.name,
-                    recordQualified = grade != QualityGrade.C,
+                    recordQualified = !mockDetected && grade != QualityGrade.C,
                 ),
             )
         }
@@ -361,19 +372,20 @@ class AppRepository(private val database: DeltaTDatabase) {
         val uncertainty = state.passes.maxOfOrNull { it.uncertaintyMillis } ?: 500L
         val monthlyBest = benchmarks.monthlyTotal?.session?.totalDurationNanos
         val weeklyBest = benchmarks.weeklyTotal?.session?.totalDurationNanos
-        val totalColor = RecordJudge.periodColor(total, monthlyBest, weeklyBest, grade, uncertainty)
+        val totalColor = if (mockDetected) ResultColor.NEUTRAL else RecordJudge.periodColor(total, monthlyBest, weeklyBest, grade, uncertainty)
         val now = System.currentTimeMillis()
         dao.insertEvaluation(
             SessionEvaluationEntity(
                 id = evaluationId,
                 sessionId = sessionId,
                 checkpointVersionId = versionId,
-                status = "VALID",
+                status = if (mockDetected) "INVALID" else "VALID",
+                failureReason = if (mockDetected) "检测到模拟定位" else null,
                 startElapsedNanos = start,
                 finishElapsedNanos = finish,
                 totalDurationNanos = total,
                 qualityGrade = grade.name,
-                recordQualified = grade != QualityGrade.C,
+                recordQualified = !mockDetected && grade != QualityGrade.C,
                 monthlyReferenceSessionId = benchmarks.monthlyTotal?.session?.id,
                 weeklyReferenceSessionId = benchmarks.weeklyTotal?.session?.id,
                 monthlyBestTotalNanos = monthlyBest,
@@ -402,8 +414,9 @@ class AppRepository(private val database: DeltaTDatabase) {
         dao.updateSession(
             session.copy(
                 status = "COMPLETED", startElapsedNanos = start, finishElapsedNanos = finish,
-                totalDurationNanos = total, validity = "VALID", qualityGrade = grade.name,
-                endedWallTimeMillis = now, isMockDetected = session.isMockDetected,
+                totalDurationNanos = total, validity = if (mockDetected) "INVALID" else "VALID", qualityGrade = grade.name,
+                invalidReason = if (mockDetected) "检测到模拟定位" else null,
+                endedWallTimeMillis = now, isMockDetected = mockDetected,
                 monthlyReferenceSessionIdSnapshot = benchmarks.monthlyTotal?.session?.id,
                 weeklyReferenceSessionIdSnapshot = benchmarks.weeklyTotal?.session?.id,
                 monthlyBestTotalNanos = monthlyBest,

@@ -24,6 +24,11 @@ import app.deltat.commute.data.TrackPointEntity
 import app.deltat.commute.domain.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -44,7 +49,21 @@ class TimingService : Service() {
     private val weeklyProgress = LiveReferenceProgress()
     private val monthlySectorProgress = LiveReferenceProgress()
     private val weeklySectorProgress = LiveReferenceProgress()
-    private val fixChannel = Channel<LocationFix>(Channel.UNLIMITED)
+    private val stateMutex = Mutex()
+    private val pendingFixes = AtomicInteger()
+    private val droppedFixes = AtomicLong()
+    private val fixChannel = Channel<LocationFix>(
+        capacity = FIX_QUEUE_CAPACITY,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        onUndeliveredElement = {
+            pendingFixes.updateAndGet { count -> (count - 1).coerceAtLeast(0) }
+            droppedFixes.incrementAndGet()
+        },
+    )
+    private var monthlyTotalReference: PreparedReference? = null
+    private var weeklyTotalReference: PreparedReference? = null
+    private var monthlySectorReferences: List<PreparedReference?> = List(3) { null }
+    private var weeklySectorReferences: List<PreparedReference?> = List(3) { null }
     private val speedPeakTracker = SpeedPeakTracker()
     private var lastNotificationAt = 0L
     private var lastGnssPersistAt = 0L
@@ -52,37 +71,58 @@ class TimingService : Service() {
     override fun onCreate() {
         super.onCreate()
         repository = (application as DeltaTApplication).repository
-        locationSource = AndroidGnssLocationSource(this)
+        locationSource = (application as DeltaTApplication).locationSourceFactory(this)
         createChannel()
         scope.launch {
-            for (fix in fixChannel) processIncomingFix(fix)
+            for (fix in fixChannel) {
+                pendingFixes.updateAndGet { count -> (count - 1).coerceAtLeast(0) }
+                stateMutex.withLock { processIncomingFix(fix) }
+                RuntimeBus.update { it.copy(pendingFixCount = pendingFixes.get()) }
+            }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> stopCurrent(false)
-            ACTION_STOP_BASELINE -> stopCurrent(true)
+            ACTION_STOP -> launchCommand { stopCurrent(false) }
+            ACTION_STOP_BASELINE -> launchCommand { stopCurrent(true) }
             ACTION_START_BASELINE -> {
                 startForeground(NOTIFICATION_ID, notification("正在启动定位…"))
-                val routeId = requireNotNull(intent.getStringExtra(EXTRA_ROUTE_ID))
-                scope.launch { startBaseline(routeId) }
+                val routeId = intent.getStringExtra(EXTRA_ROUTE_ID)
+                if (routeId == null) launchCommand { stopWithError("缺少路线参数") }
+                else launchCommand { startBaseline(routeId) }
             }
             ACTION_ARM -> {
                 startForeground(NOTIFICATION_ID, notification("正在启动定位…"))
-                val routeId = requireNotNull(intent.getStringExtra(EXTRA_ROUTE_ID))
-                scope.launch { startExplicitTimed(routeId) }
+                val routeId = intent.getStringExtra(EXTRA_ROUTE_ID)
+                if (routeId == null) launchCommand { stopWithError("缺少路线参数") }
+                else launchCommand { startExplicitTimed(routeId) }
             }
             ACTION_ARM_AUTO -> {
                 startForeground(NOTIFICATION_ID, notification("正在识别路线…"))
-                scope.launch { startAutomaticTimed() }
+                launchCommand { startAutomaticTimed() }
             }
             ACTION_SWITCH_ROUTE -> {
-                val routeId = requireNotNull(intent.getStringExtra(EXTRA_ROUTE_ID))
-                scope.launch { switchTimedRoute(routeId) }
+                val routeId = intent.getStringExtra(EXTRA_ROUTE_ID)
+                if (routeId == null) launchCommand { stopWithError("缺少路线参数") }
+                else launchCommand { switchTimedRoute(routeId) }
             }
         }
         return START_NOT_STICKY
+    }
+
+    private fun launchCommand(block: suspend () -> Unit) {
+        scope.launch {
+            stateMutex.withLock {
+                try {
+                    block()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    stopWithError("服务操作失败：${error.message ?: error.javaClass.simpleName}")
+                }
+            }
+        }
     }
 
     private suspend fun startBaseline(routeId: String) {
@@ -123,18 +163,25 @@ class TimingService : Service() {
 
     private suspend fun startLocation() {
         if (!hasLocationPermission()) return stopWithError("未获得精确定位权限")
-        withContext(Dispatchers.Main) {
-            locationStarted = true
-            locationSource.start(::onFix) { health ->
-                RuntimeBus.update { it.copy(gnssHealth = health) }
-                val now = SystemClock.elapsedRealtimeNanos()
-                val id = sessionId
-                if (id != null && now - lastGnssPersistAt >= 10_000_000_000L) {
-                    lastGnssPersistAt = now
-                    scope.launch { repository.saveGnss(id, now, health) }
+        try {
+            withContext(Dispatchers.Main) {
+                locationSource.start(::onFix) { health ->
+                    RuntimeBus.update { it.copy(gnssHealth = health) }
+                    val now = SystemClock.elapsedRealtimeNanos()
+                    val id = sessionId
+                    if (id != null && now - lastGnssPersistAt >= 10_000_000_000L) {
+                        lastGnssPersistAt = now
+                        scope.launch { repository.saveGnss(id, now, health) }
+                    }
+                    updateNotification()
                 }
-                updateNotification()
+                locationStarted = true
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            locationStarted = false
+            stopWithError("定位启动失败：${error.message ?: error.javaClass.simpleName}")
         }
     }
 
@@ -143,6 +190,10 @@ class TimingService : Service() {
         routeName = candidate.routeName
         checkpoints = candidate.checkpoints
         benchmarks = repository.comparisonBenchmarksForTiming(candidate.routeId)
+        monthlyTotalReference = benchmarks?.monthlyTotal?.prepare()
+        weeklyTotalReference = benchmarks?.weeklyTotal?.prepare()
+        monthlySectorReferences = benchmarks?.monthlySectorReferences?.map { it?.prepare() } ?: List(3) { null }
+        weeklySectorReferences = benchmarks?.weeklySectorReferences?.map { it?.prepare() } ?: List(3) { null }
         val routeSourceTrack = repository.routeSourceTrack(candidate.routeId).map(::toFix)
         engineState = EngineState()
         monthlyProgress.reset()
@@ -167,14 +218,14 @@ class TimingService : Service() {
                 gnssHealth = it.gnssHealth,
                 lastFix = detectionFix,
                 deltaReferenceType = if (benchmarks?.monthlyTotal != null) DeltaReferenceType.MONTHLY_BEST else DeltaReferenceType.NONE,
-                referenceTrack = benchmarks?.monthlyTotal?.track?.map(::toFix).orEmpty(),
+                referenceTrack = monthlyTotalReference?.track.orEmpty(),
                 routeSourceTrack = routeSourceTrack,
                 routeCheckpoints = candidate.checkpoints.sortedBy { checkpoint -> checkpoint.orderIndex },
-                checkpointPassElapsedNanos = benchmarks?.monthlyTotal?.passes?.map { pass -> pass.passElapsedNanos }.orEmpty(),
-                monthlyReferenceTrack = benchmarks?.monthlyTotal?.track?.map(::toFix).orEmpty(),
-                monthlyReferencePassElapsedNanos = benchmarks?.monthlyTotal?.passes?.map { pass -> pass.passElapsedNanos }.orEmpty(),
-                weeklyReferenceTrack = benchmarks?.weeklyTotal?.track?.map(::toFix).orEmpty(),
-                weeklyReferencePassElapsedNanos = benchmarks?.weeklyTotal?.passes?.map { pass -> pass.passElapsedNanos }.orEmpty(),
+                checkpointPassElapsedNanos = monthlyTotalReference?.passElapsedNanos.orEmpty(),
+                monthlyReferenceTrack = monthlyTotalReference?.track.orEmpty(),
+                monthlyReferencePassElapsedNanos = monthlyTotalReference?.passElapsedNanos.orEmpty(),
+                weeklyReferenceTrack = weeklyTotalReference?.track.orEmpty(),
+                weeklyReferencePassElapsedNanos = weeklyTotalReference?.passElapsedNanos.orEmpty(),
                 comparisonMessage = when {
                     benchmarks?.monthlyTotal == null -> "本月首条记录"
                     benchmarks?.weeklyTotal == null -> "本周首条记录"
@@ -197,7 +248,15 @@ class TimingService : Service() {
     }
 
     private fun onFix(fix: LocationFix) {
-        fixChannel.trySend(fix)
+        pendingFixes.incrementAndGet()
+        val result = fixChannel.trySend(fix)
+        if (result.isFailure) pendingFixes.updateAndGet { count -> (count - 1).coerceAtLeast(0) }
+        RuntimeBus.update {
+            it.copy(
+                pendingFixCount = pendingFixes.get().coerceAtMost(FIX_QUEUE_CAPACITY),
+                droppedFixCount = droppedFixes.get(),
+            )
+        }
     }
 
     private suspend fun processIncomingFix(fix: LocationFix) {
@@ -216,15 +275,17 @@ class TimingService : Service() {
                 "TIMED" -> processTimedFix(fix)
             }
             updateNotification()
-        } catch (t: Throwable) {
-            RuntimeBus.update { it.copy(error = t.message ?: "定位处理失败") }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            RuntimeBus.update { it.copy(error = error.message ?: "定位处理失败") }
         }
     }
 
     private suspend fun processBaselineFix(fix: LocationFix) {
         val id = sessionId ?: return
         val track = (RuntimeBus.state.value.track + fix).takeLast(4_000)
-        repository.appendFix(id, fix, usedForTiming = fix.accuracyMeters <= 50)
+        repository.appendFix(id, fix, usedForTiming = fix.accuracyMeters <= 50 && !fix.isMock)
         RuntimeBus.update {
             it.copy(
                 lastFix = fix,
@@ -237,11 +298,11 @@ class TimingService : Service() {
     private suspend fun processTimedFix(fix: LocationFix) {
         val id = sessionId ?: return
         val track = (RuntimeBus.state.value.track + fix).takeLast(4_000)
-        repository.appendFix(id, fix, usedForTiming = fix.accuracyMeters <= 50)
+        repository.appendFix(id, fix, usedForTiming = fix.accuracyMeters <= 50 && !fix.isMock)
         val previousProcessedFix = engineState.previousFix
         val transition = engine.processFix(engineState, fix, checkpoints)
-        engineState = transition.newState
         repository.persistTransition(id, transition, benchmarks)
+        engineState = transition.newState
         if (transition.emittedEvents.any { it is EngineEvent.PassConfirmed }) vibrateCheckpoint()
 
         val orderedPasses = engineState.passes.sortedBy { it.checkpoint.orderIndex }
@@ -272,15 +333,15 @@ class TimingService : Service() {
         }
 
         val justConfirmed = transition.emittedEvents.any { it is EngineEvent.PassConfirmed }
-        val monthlyTotalLive = calculateLiveComparison(fix, previousProcessedFix, firstPass, currentSector, justConfirmed, benchmarks?.monthlyTotal, monthlyProgress)
-        val weeklyTotalLive = calculateLiveComparison(fix, previousProcessedFix, firstPass, currentSector, justConfirmed, benchmarks?.weeklyTotal, weeklyProgress)
+        val monthlyTotalLive = calculateLiveComparison(fix, previousProcessedFix, firstPass, currentSector, justConfirmed, monthlyTotalReference, monthlyProgress)
+        val weeklyTotalLive = calculateLiveComparison(fix, previousProcessedFix, firstPass, currentSector, justConfirmed, weeklyTotalReference, weeklyProgress)
         val monthlySectorLive = calculateLiveComparison(
             fix, previousProcessedFix, firstPass, currentSector, justConfirmed,
-            benchmarks?.monthlySectorReferences?.getOrNull(currentSector), monthlySectorProgress,
+            monthlySectorReferences.getOrNull(currentSector), monthlySectorProgress,
         )
         val weeklySectorLive = calculateLiveComparison(
             fix, previousProcessedFix, firstPass, currentSector, justConfirmed,
-            benchmarks?.weeklySectorReferences?.getOrNull(currentSector), weeklySectorProgress,
+            weeklySectorReferences.getOrNull(currentSector), weeklySectorProgress,
         )
         val monthlyLive = LiveComparison(monthlyTotalLive.cumulativeDeltaNanos, monthlySectorLive.sectorDeltaNanos, monthlyTotalLive.matched || monthlySectorLive.matched)
         val weeklyLive = LiveComparison(weeklyTotalLive.cumulativeDeltaNanos, weeklySectorLive.sectorDeltaNanos, weeklyTotalLive.matched || weeklySectorLive.matched)
@@ -366,12 +427,22 @@ class TimingService : Service() {
                 locationSource.stop()
                 locationStarted = false
             }
-            stopForeground(STOP_FOREGROUND_DETACH)
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
     }
 
     private data class LiveComparison(val cumulativeDeltaNanos: Long?, val sectorDeltaNanos: Long?, val matched: Boolean)
+
+    private data class PreparedReference(
+        val track: List<LocationFix>,
+        val passElapsedNanos: List<Long>,
+    )
+
+    private fun ReferenceRunData.prepare() = PreparedReference(
+        track = track.map(::toFix),
+        passElapsedNanos = passes.map { it.passElapsedNanos },
+    )
 
     private class LiveReferenceProgress {
         var expectedElapsedNanos: Long = 0L
@@ -394,11 +465,11 @@ class TimingService : Service() {
         firstPass: Long?,
         currentSector: Int,
         justConfirmed: Boolean,
-        reference: ReferenceRunData?,
+        reference: PreparedReference?,
         progress: LiveReferenceProgress,
     ): LiveComparison {
         if (firstPass == null || reference == null) return LiveComparison(null, null, false)
-        val referencePasses = reference.passes.map { it.passElapsedNanos }
+        val referencePasses = reference.passElapsedNanos
         if (referencePasses.size != 4) return LiveComparison(null, null, false)
         val confirmedPass = engineState.passes.maxByOrNull { it.checkpoint.orderIndex }
         val confirmedPassIndex = confirmedPass?.checkpoint?.orderIndex ?: -1
@@ -417,7 +488,7 @@ class TimingService : Service() {
         val maximumExpected = progress.expectedElapsedNanos + max(5_000_000_000L, actualGap * 3)
         val match = ReferenceProgressMatcher.match(
             fix = fix,
-            referenceTrack = reference.track.map(::toFix),
+            referenceTrack = reference.track,
             referencePassElapsedNanos = referencePasses,
             currentSectorIndex = currentSector,
             minimumExpectedElapsedNanos = progress.expectedElapsedNanos,
@@ -442,31 +513,45 @@ class TimingService : Service() {
     private fun liveUncertaintyMillis(fix: LocationFix): Long =
         ((fix.accuracyMeters / max(fix.speedMetersPerSecond ?: 2.0, 2.0)) * 1_000.0).toLong()
 
-    private fun stopCurrent(baseline: Boolean) {
+    private suspend fun stopCurrent(baseline: Boolean) {
         val id = sessionId
-        scope.launch {
-            if (id != null) {
-                if (baseline) repository.finishBaseline(id) else {
-                    repository.saveSpeedPeak(id, speedPeakTracker.peak)
-                    repository.cancelSession(id, "用户主动结束")
-                }
+        if (id != null) {
+            if (baseline) repository.finishBaseline(id) else {
+                repository.saveSpeedPeak(id, speedPeakTracker.peak)
+                repository.cancelSession(id, "用户主动结束")
             }
-            withContext(Dispatchers.Main) {
-                runCatching { locationSource.stop() }
-                locationStarted = false
-            }
-            if (baseline && id != null) RuntimeBus.update { it.copy(status = "路线轨迹已录制") } else RuntimeBus.reset()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
         }
-    }
-
-    private fun stopWithError(message: String) {
-        RuntimeBus.reset(message)
-        if (locationStarted) runCatching { locationSource.stop() }
-        locationStarted = false
+        withContext(Dispatchers.Main) {
+            try { locationSource.stop() } catch (_: Exception) { }
+            locationStarted = false
+        }
+        sessionId = null
+        mode = ""
+        clearPreparedReferences()
+        if (baseline && id != null) RuntimeBus.update { it.copy(status = "路线轨迹已录制") } else RuntimeBus.reset()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private suspend fun stopWithError(message: String) {
+        RuntimeBus.reset(message)
+        if (locationStarted) withContext(Dispatchers.Main) {
+            try { locationSource.stop() } catch (_: Exception) { }
+        }
+        locationStarted = false
+        sessionId?.let { repository.markInterrupted(it, message) }
+        sessionId = null
+        mode = ""
+        clearPreparedReferences()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun clearPreparedReferences() {
+        monthlyTotalReference = null
+        weeklyTotalReference = null
+        monthlySectorReferences = List(3) { null }
+        weeklySectorReferences = List(3) { null }
     }
 
     private fun statusLabel(state: EngineState): String = when (state.status) {
@@ -548,12 +633,14 @@ class TimingService : Service() {
     )
 
     override fun onDestroy() {
-        runCatching { locationSource.stop() }
+        try { locationSource.stop() } catch (_: Exception) { }
         val id = sessionId
         if (id != null && engineState.status != EngineStatus.COMPLETED && RuntimeBus.state.value.status !in setOf("路线轨迹已录制", "IDLE")) {
-            scope.launch { repository.markInterrupted(id, "前台定位服务已停止") }
+            (application as DeltaTApplication).markInterruptedFromDestroyedService(id, "前台定位服务已停止")
         }
+        fixChannel.close()
         scope.cancel()
+        clearPreparedReferences()
         super.onDestroy()
     }
 
@@ -569,5 +656,6 @@ class TimingService : Service() {
         const val EXTRA_ROUTE_ID = "route_id"
         private const val CHANNEL_ID = "delta_t_timing"
         private const val NOTIFICATION_ID = 4101
+        internal const val FIX_QUEUE_CAPACITY = 64
     }
 }

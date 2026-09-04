@@ -8,6 +8,8 @@ import app.deltat.commute.data.CheckpointVersionEntity
 import app.deltat.commute.data.RouteProfileEntity
 import app.deltat.commute.data.SectorResultEntity
 import app.deltat.commute.data.SessionEntity
+import app.deltat.commute.data.SessionEvaluationEntity
+import app.deltat.commute.data.EvaluationSectorEntity
 import app.deltat.commute.data.TrackPointEntity
 import app.deltat.commute.domain.EngineStatus
 import app.deltat.commute.location.RuntimeBus
@@ -82,19 +84,45 @@ class FullAppUiFlowTest {
         composeRule.onNodeWithText("全部").performClick()
         composeRule.onNodeWithText("P1").assertExists()
         composeRule.onNodeWithText("筛选范围 PB").assertExists()
+        composeRule.onNodeWithTag("leaderboard-P2").performScrollTo().performClick()
+        composeRule.onNodeWithText("单次详情").assertExists()
+        composeRule.onNodeWithContentDescription("删除记录").performClick()
+        composeRule.onNodeWithText("确认删除").performClick()
+        composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("个人纪录").fetchSemanticsNodes().isNotEmpty() }
+        composeRule.onNodeWithTag("period-全部").assertIsSelected()
+        composeRule.onNodeWithTag("records-tab-LEADERBOARD").assertIsSelected()
 
         composeRule.onNodeWithText("设置").performClick()
         composeRule.onNodeWithText("锁屏继续计时检查").assertExists()
-        composeRule.onNodeWithTag("settings-list").performScrollToIndex(9)
+        composeRule.onNodeWithTag("settings-list").performScrollToIndex(10)
         composeRule.onNodeWithText("数据导出").assertExists()
         composeRule.onNodeWithText("JSON 诊断包").assertExists()
         composeRule.onNodeWithText("CSV").assertExists()
         composeRule.saveScreenshot("settings-mock-export.png")
-        composeRule.onNodeWithTag("settings-list").performScrollToIndex(10)
+        composeRule.onNodeWithTag("settings-list").performScrollToIndex(11)
         composeRule.onNode(hasText("Delta T ${BuildConfig.VERSION_NAME}", substring = true)).assertExists()
 
         composeRule.onNodeWithText("首页").performClick()
         composeRule.onNodeWithText("准备出发").assertExists()
+    }
+
+    @Test fun activityRecreationPreservesRecordsFilterRouteAndDetailBackStack() {
+        composeRule.onNodeWithText("纪录").performClick()
+        composeRule.onNodeWithText("全部").performClick()
+        composeRule.onNodeWithTag("period-全部").assertIsSelected()
+        composeRule.activityRule.scenario.recreate()
+        composeRule.onNodeWithText("个人纪录").assertExists()
+        composeRule.onNodeWithTag("period-全部").assertIsSelected()
+        composeRule.onNodeWithTag("route-option-work").assertIsSelected()
+        composeRule.onNodeWithTag("leaderboard-P2").performScrollTo().performClick()
+        composeRule.onNodeWithText("单次详情").assertExists()
+        composeRule.onNodeWithText("28:14.30").assertExists()
+        composeRule.activityRule.scenario.recreate()
+        composeRule.onNodeWithText("单次详情").assertExists()
+        composeRule.onNodeWithText("28:14.30").assertExists()
+        composeRule.onNodeWithContentDescription("返回").performClick()
+        composeRule.onNodeWithTag("period-全部").assertIsSelected()
+        composeRule.onNodeWithTag("leaderboard-P2").assertTextContains("28:14.30")
     }
 
     @Test fun routeLibraryDeleteGuardNewRouteAndEditorNavigation() {
@@ -177,6 +205,9 @@ class FullAppUiFlowTest {
         dao.insertSession(session("work-older", "work", "v-work-2", workOlderTime, 1_694_300_000_000, 82.4 / 3.6))
         dao.insertSession(session("work-old", "work", "v-work-1", oldVersionTime, 1_660_000_000_000, 80.0 / 3.6))
         dao.insertSession(session("home-run", "home", "v-home", homeTime, 1_800_000_000_000, 76.0 / 3.6))
+        dao.insertEvaluation(evaluation("eval-work-best", "work-best", "v-work-2", workBestTime, 1_678_100_000_000, -16_200_000_000, -12_300_000_000))
+        dao.insertEvaluation(evaluation("eval-work-older", "work-older", "v-work-2", workOlderTime, 1_694_300_000_000, 16_200_000_000, 16_200_000_000))
+        dao.insertEvaluation(evaluation("eval-home-run", "home-run", "v-home", homeTime, 1_800_000_000_000, null, null))
 
         val elapsed = (0 until 40).map { 8_000_000_000 + it * 43_000_000_000L }
         (0 until 40).forEach { index -> dao.insertTrackPoint(trackPoint("work-best", index, workBestTime, elapsed[index])) }
@@ -195,6 +226,19 @@ class FullAppUiFlowTest {
             SectorResultEntity("work-best", 2, 603_000_000_000, null, null, -2_900_000_000, "GREEN", true),
         )
         for (sector in sectors) dao.insertSector(sector)
+        sectors.forEach { sector ->
+            dao.insertEvaluationSector(
+                EvaluationSectorEntity(
+                    evaluationId = "eval-work-best",
+                    sectorIndex = sector.sectorIndex,
+                    durationNanos = sector.durationNanos,
+                    monthlyDeltaNanos = sector.monthlyDeltaNanos,
+                    weeklyDeltaNanos = sector.weeklyDeltaNanos,
+                    resultColorAtCompletion = sector.resultColorAtCompletion,
+                    recordQualified = true,
+                ),
+            )
+        }
     }
 
     private fun checkpoints(version: String, prefix: String) = listOf(0, 13, 26, 39).mapIndexed { order, point ->
@@ -213,6 +257,29 @@ class FullAppUiFlowTest {
         appVersion = "0.2.0-test", deviceModel = "UI fixture", androidVersion = "16",
         maxSpeedMps = maxSpeed, maxSpeedElapsedNanos = 782_000_000_000,
         maxSpeedWallTimeMillis = started + 774_000, createdAtMillis = started,
+    )
+
+    private fun evaluation(
+        id: String,
+        sessionId: String,
+        versionId: String,
+        createdAt: Long,
+        duration: Long,
+        monthlyDelta: Long?,
+        weeklyDelta: Long?,
+    ) = SessionEvaluationEntity(
+        id = id,
+        sessionId = sessionId,
+        checkpointVersionId = versionId,
+        status = "VALID",
+        totalDurationNanos = duration,
+        qualityGrade = "A",
+        recordQualified = true,
+        monthlyDeltaNanos = monthlyDelta,
+        weeklyDeltaNanos = weeklyDelta,
+        timingEngineVersion = 3,
+        createdAtMillis = createdAt,
+        updatedAtMillis = createdAt,
     )
 
     private fun trackPoint(session: String, index: Int, started: Long, elapsed: Long) = TrackPointEntity(

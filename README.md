@@ -94,6 +94,10 @@
 7. [07_测试与验收计划.md](07_测试与验收计划.md)：单测、模拟轨迹、OPPO 实机道路测试和验收条件。
 8. [08_里程碑_风险与待决策.md](08_里程碑_风险与待决策.md)：开发顺序、Definition of Done、风险与输入清单。
 9. [09_官方资料索引.md](09_官方资料索引.md)：Android 与 OPPO 官方参考链接。
+10. [10_问题汇总与重设计需求_Review.md](10_问题汇总与重设计需求_Review.md)：历史问题、重设计需求与 Review 检查项。
+11. [11_设计开发测试工作流.md](11_设计开发测试工作流.md)：每轮先截最新构建、据实图更新设计、确认后实现、三图对照和带 Mock 的深度测试。
+
+后续产品、设计和代码变更同时受根目录 [AGENTS.md](AGENTS.md) 的强制工作流约束：每次修改设计先重新截取最新运行版本，以本轮实图为底稿并冻结唯一目标设计；用户确认后编码，再用修改后同状态实图完成三图对照和带数据的导航测试。旧稿与旧截图只作历史参考，下一轮必须重新核对构建并截图。
 
 ## 图示与设计稿
 
@@ -126,6 +130,12 @@
 - 构建类型：单一 `debug/release`，不包含第三方地图 SDK 或 API Key
 - 交付构建：`debug`（当前版本 0.5.0-test）
 
-具备 JDK 17 与 Android SDK 36 时，运行 `scripts/build-apk.sh` 可执行单测、Lint 和 APK 构建。产物复制到 `dist/Delta-T-0.5.0-debug.apk`。
+具备 JDK 17 与 Android SDK 36 时，运行 `scripts/build-apk.sh` 可执行单测、Lint 和 APK 构建。产物复制到 `dist/Delta-T-0.6.0-debug.apk`。
 
 交付 APK 默认不包含覆盖率插桩。
+
+### APK交付约定
+
+后续可安装且已验证的APK统一放到用户指定的 `smb://DXP4800-861B._smb._tcp.local/ssd/app/`（NAS实际目录`/volume2/ssd/app/`），本地`dist/`保留副本。构建脚本仅生成本地产物，交付时还须执行NAS上传与SHA-256校验，不将“构建成功”当作“已上传”。
+
+命名：`Delta-T_v<版本>_<构建时间YYYYMMDD-HHmm>_<简短变更说明>_<SHA256前8位>.apk`。使用北京时间，保留测试版标识和历史包；不上传中间包或androidTest APK。具体执行规则见`AGENTS.md`的“APK交付位置与命名”。

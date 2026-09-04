@@ -19,6 +19,8 @@ import app.deltat.commute.data.SessionEvaluationEntity
 import app.deltat.commute.data.EvaluationSectorEntity
 import app.deltat.commute.domain.CheckpointSelection
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -139,6 +141,62 @@ class DeltaTDatabaseTest {
         val route = RouteProfileEntity("r", "上班", "TO_WORK", createdAtMillis = 1, updatedAtMillis = 1)
         db.dao().insertRoute(route)
         assertEquals(route, db.dao().route("r"))
+        db.close()
+    }
+
+    @Test fun historyRowsHaveStableTieBreakOrdering() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), DeltaTDatabase::class.java).build()
+        val dao = db.dao()
+        dao.insertRoute(RouteProfileEntity("r", "上班", "TO_WORK", createdAtMillis = 1, updatedAtMillis = 1))
+        suspend fun insert(id: String, createdAt: Long) {
+            dao.insertSession(
+                SessionEntity(
+                    id = id, routeProfileId = "r", checkpointVersionId = null, mode = "TIMED", status = "COMPLETED",
+                    referenceSessionIdSnapshot = null, startedWallTimeMillis = 100, bootCount = 0,
+                    appVersion = "test", deviceModel = "test", androidVersion = "16", createdAtMillis = createdAt,
+                ),
+            )
+        }
+        insert("a", 1)
+        insert("b", 2)
+        insert("c", 2)
+
+        assertEquals(listOf("c", "b", "a"), dao.observeSessionList().first().map { it.id })
+        db.close()
+    }
+
+    @Test fun appendFixIsAtomicAndMockPointsAreNeverUsedForTiming() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), DeltaTDatabase::class.java).build()
+        val dao = db.dao()
+        dao.insertRoute(RouteProfileEntity("r", "上班", "TO_WORK", createdAtMillis = 1, updatedAtMillis = 1))
+        dao.insertSession(
+            SessionEntity(
+                "s", "r", null, "TIMED", "ARMED", null, 1, bootCount = 0,
+                appVersion = "test", deviceModel = "test", androidVersion = "16", createdAtMillis = 1,
+            ),
+        )
+        val repository = AppRepository(db)
+        coroutineScope {
+            repeat(20) { index ->
+                launch {
+                    repository.appendFix(
+                        "s",
+                        app.deltat.commute.domain.LocationFix(31.0, 121.0 + index * .00001, index.toLong(), index.toLong(), 5.0),
+                        usedForTiming = true,
+                    )
+                }
+            }
+        }
+        repository.appendFix(
+            "s",
+            app.deltat.commute.domain.LocationFix(31.0, 121.1, 100, 100, 5.0, isMock = true),
+            usedForTiming = true,
+        )
+
+        val track = dao.track("s")
+        assertEquals((0L..20L).toList(), track.map { it.sequence })
+        assertEquals(false, track.last().usedForTiming)
+        assertEquals(true, dao.session("s")?.isMockDetected)
         db.close()
     }
 

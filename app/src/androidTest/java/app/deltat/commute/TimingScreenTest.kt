@@ -2,9 +2,13 @@ package app.deltat.commute
 
 import android.graphics.Bitmap
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -27,6 +31,7 @@ import app.deltat.commute.ui.DeltaTTheme
 import app.deltat.commute.ui.TimingScreen
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertTrue
 import java.io.File
 
 class TimingScreenTest {
@@ -81,12 +86,15 @@ class TimingScreenTest {
         composeRule.onNodeWithText("周 Δ −00:08.40").assertExists()
         composeRule.onNodeWithText("月 Δ +00:02.40").assertExists()
         composeRule.onNodeWithText("有望本周最佳 · 实时估算").assertExists()
-        composeRule.onNodeWithText("卫星 11/20").assertExists()
+        composeRule.onNodeWithText("GPS 良好 · 11/20").assertExists()
         composeRule.onNodeWithTag("abstract-route-map").assertExists()
         composeRule.onNodeWithTag("sector-card-S1").assertExists()
         composeRule.onNodeWithTag("sector-card-S2").assertExists()
         composeRule.onNodeWithTag("sector-card-S3").assertExists()
         composeRule.onNodeWithText("未开始").assertExists()
+        val liveStatusBounds = composeRule.onNodeWithText("计时中").fetchSemanticsNode().boundsInRoot
+        val liveSectorBounds = composeRule.onNodeWithTag("sector-card-S2").fetchSemanticsNode().boundsInRoot
+        assertTrue("分段状态文字必须完整位于卡片内", liveStatusBounds.bottom < liveSectorBounds.bottom)
         composeRule.onNodeWithText("82.4").assertExists()
         composeRule.onNodeWithText("结束本次（成绩无效）").performClick()
         composeRule.onNodeWithText("结束本次计时？").assertExists()
@@ -113,6 +121,96 @@ class TimingScreenTest {
         composeRule.onNodeWithText("84.2").assertExists()
         composeRule.onNodeWithText("查看本次详情").assertExists()
         saveScreenshot("timing-mock-completed.png")
+    }
+
+    @Test fun longTrackKeepsTimingAndMapResponsiveAtDisplayWindowLimit() {
+        val route = RouteProfileEntity(
+            id = "work", name = "上班", directionType = "TO_WORK",
+            activeCheckpointVersionId = "v-work", createdAtMillis = 1, updatedAtMillis = 1,
+        )
+        val points = track(pointCount = 4_000)
+        val runtime = mutableStateOf(liveSnapshot().copy(
+            track = points.take(100),
+            routeSourceTrack = points,
+            referenceTrack = points.map { it.copy(latitude = it.latitude + .00003) },
+            lastFix = points[99],
+        ))
+
+        composeRule.setContent {
+            DeltaTTheme {
+                TimingScreen(
+                    nav = rememberNavController(), route = route, routes = listOf(route),
+                    runtime = runtime.value, start = {}, stop = {}, switchRoute = {},
+                    elapsedRealtimeNanos = {
+                        requireNotNull(runtime.value.startedAtElapsedNanos) + runtime.value.elapsedNanos
+                    },
+                    animateClock = false,
+                )
+            }
+        }
+
+        (200..4_000 step 100).forEachIndexed { index, count ->
+            composeRule.runOnIdle {
+                runtime.value = runtime.value.copy(
+                    track = points.take(count),
+                    lastFix = points[count - 1],
+                    elapsedNanos = 1_122_600_000_000L + (index + 1) * 1_000_000_000L,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("19:21.60").assertExists()
+        composeRule.onNodeWithTag("abstract-route-map").assertExists()
+        composeRule.onNodeWithTag("sector-card-S2").assertExists()
+        saveScreenshot("timing-mock-long-track-4000.png")
+    }
+
+    @Test fun largeFontKeepsSectorStatusAndMapInsideReadableLayout() {
+        val route = RouteProfileEntity(
+            id = "work", name = "上班", directionType = "TO_WORK",
+            activeCheckpointVersionId = "v-work", createdAtMillis = 1, updatedAtMillis = 1,
+        )
+        val runtime = liveSnapshot()
+        composeRule.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1.3f)) {
+                DeltaTTheme {
+                    TimingScreen(
+                        nav = rememberNavController(), route = route, routes = listOf(route),
+                        runtime = runtime, start = {}, stop = {}, switchRoute = {},
+                        elapsedRealtimeNanos = { requireNotNull(runtime.startedAtElapsedNanos) + runtime.elapsedNanos },
+                        animateClock = false,
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("计时中").assertIsDisplayed()
+        val mapBounds = composeRule.onNodeWithTag("abstract-route-map").fetchSemanticsNode().boundsInRoot
+        val aspectRatio = mapBounds.width / mapBounds.height
+        assertTrue("地图不能再次退化为横向扁条", aspectRatio in 1.15f..1.40f)
+    }
+
+    @Test fun gpsCountsAreVisibleAndRefreshThroughDetectingWaitingAndLiveStates() {
+        val route = RouteProfileEntity("gps-ui", "上班", "TO_WORK", createdAtMillis = 1, updatedAtMillis = 1)
+        val state = mutableStateOf(detectingSnapshot().copy(gnssHealth = GnssHealth()))
+        composeRule.setContent { DeltaTTheme {
+            TimingScreen(rememberNavController(), route, listOf(route), state.value, {}, {}, {}, animateClock = false)
+        } }
+        composeRule.onNodeWithText("GPS 搜星中 · --/--").assertExists()
+        composeRule.runOnIdle { state.value = waitingSnapshot().copy(gnssHealth = GnssHealth(12, 9)) }
+        composeRule.onNodeWithText("GPS 良好 · 9/12").assertExists()
+        composeRule.runOnIdle { state.value = liveSnapshot().copy(gnssHealth = GnssHealth(12, 9)) }
+        composeRule.onNodeWithText("GPS 良好 · 9/12").assertExists()
+        composeRule.runOnIdle { state.value = state.value.copy(gnssHealth = GnssHealth(128, 99)) }
+        val counts = composeRule.onNodeWithText("GPS 良好 · 99/128").fetchSemanticsNode().boundsInRoot
+        assertTrue(counts.right <= composeRule.onRoot().fetchSemanticsNode().boundsInRoot.right)
+        composeRule.onNodeWithText("GPS 良好 · 9/12").assertDoesNotExist()
+        composeRule.runOnIdle { state.value = state.value.copy(gnssHealth = GnssHealth(satelliteStatusReceived = true)) }
+        composeRule.onNodeWithText("GPS 搜星中 · 0/0").assertExists()
+        composeRule.runOnIdle { state.value = state.value.copy(gnssHealth = GnssHealth(12, 9, locationEnabled = false)) }
+        composeRule.onNodeWithText("定位已关闭").assertExists()
+        composeRule.onNodeWithText("GPS 良好 · 9/12").assertDoesNotExist()
     }
 
     private fun detectingSnapshot() = RuntimeSnapshot(
@@ -181,14 +279,14 @@ class TimingScreenTest {
         )
     }
 
-    private fun goodGnss() = GnssHealth(visibleGps = 12, usedGps = 6, visibleBeidou = 8, usedBeidou = 5, label = "GNSS 良好")
+    private fun goodGnss() = GnssHealth(visibleGps = 12, usedGps = 6, visibleBeidou = 8, usedBeidou = 5, label = "GPS 良好")
 
     private fun checkpoints() = listOf(0, 13, 26, 39).mapIndexed { order, pointIndex ->
         val point = track()[pointIndex]
         Checkpoint("cp$order", order, listOf("A", "S1", "S2", "B")[order], point.latitude, point.longitude)
     }
 
-    private fun track(): List<LocationFix> = (0 until 40).map { index ->
+    private fun track(pointCount: Int = 40): List<LocationFix> = (0 until pointCount).map { index ->
         LocationFix(
             latitude = 31.20 + index * .00022 + kotlin.math.sin(index / 5.0) * .00008,
             longitude = 121.40 + index * .00028,

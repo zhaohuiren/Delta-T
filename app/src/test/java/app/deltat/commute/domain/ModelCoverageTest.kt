@@ -5,11 +5,11 @@ import org.junit.Test
 
 class ModelCoverageTest {
     @Test fun diagnosticModelsRetainAllFields() {
-        val health = GnssHealth(10, 8, 12, 9, 5, 3, "GNSS 良好")
+        val health = GnssHealth(10, 8, 12, 9, 5, 3, "GPS 良好")
         assertEquals(8, health.usedGps)
-        assertEquals("GNSS 良好", health.copy().label)
-        assertEquals("卫星 20/27", health.displayLabel())
-        assertEquals("卫星 0/0 · 正在搜星", GnssHealth().displayLabel())
+        assertEquals("GPS 良好", health.copy().label)
+        assertEquals("GPS 良好", health.displayLabel())
+        assertEquals("GPS 搜星中", GnssHealth().displayLabel())
         assertEquals("定位已关闭", GnssHealth(locationEnabled = false).displayLabel())
         assertTrue(health.toString().contains("Beidou", ignoreCase = true))
 
@@ -29,5 +29,18 @@ class ModelCoverageTest {
 
         val transition = EngineTransition(EngineState(), listOf(event1, event2, event3), true)
         assertTrue(transition.copy().persistenceUrgent)
+    }
+
+    @Test fun gnssDisplayRequiresStableRecoveryAndPromptlyReportsDegradation() {
+        val stabilizer = GnssDisplayStabilizer(worsenSamples = 2, recoverSamples = 3)
+        fun health(used: Int, visible: Int = 20) = GnssHealth(visibleGps = visible, usedGps = used)
+
+        assertEquals("GPS 良好", stabilizer.update(health(10)))
+        assertEquals("GPS 良好", stabilizer.update(health(3)))
+        assertEquals("GPS 弱", stabilizer.update(health(3)))
+        assertEquals("GPS 弱", stabilizer.update(health(9)))
+        assertEquals("GPS 弱", stabilizer.update(health(9)))
+        assertEquals("GPS 良好", stabilizer.update(health(9)))
+        assertEquals("定位已关闭", stabilizer.update(GnssHealth(locationEnabled = false)))
     }
 }

@@ -17,6 +17,7 @@ class DefaultTimingEngine : TimingEngine {
         if (ordered.size != 4 || ordered.map { it.orderIndex } != listOf(0, 1, 2, 3)) {
             return reject(state, fix, "计时点必须是 A、S1、S2、B")
         }
+        if (fix.isMock) return reject(state, fix, "检测到模拟定位", keepPrevious = true)
         if (fix.accuracyMeters > 50.0) return reject(state, fix, "精度低于门槛")
         val previous = state.previousFix
         if (previous != null && fix.elapsedRealtimeNanos <= previous.elapsedRealtimeNanos) {

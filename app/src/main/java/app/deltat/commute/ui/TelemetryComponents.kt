@@ -242,7 +242,7 @@ fun ZoomableCheckpointEditor(
         val currentPoint = track.getOrNull(current.roundToInt().coerceIn(0, track.lastIndex.coerceAtLeast(0)))
         TelemetryPanel(Modifier.fillMaxWidth()) {
             TelemetryLabel("当前 ${labels[activeIndex]}", RacingRed)
-            Text("轨迹位置 ${if (track.size > 1) "%.1f".format(current / track.lastIndex * 100) else "0.0"}% · GNSS ${currentPoint?.accuracyMeters?.let { "%.1f m".format(it) } ?: "--"}", color = Muted)
+            Text("轨迹位置 ${if (track.size > 1) "%.1f".format(current / track.lastIndex * 100) else "0.0"}% · GPS ${currentPoint?.accuracyMeters?.let { "%.1f m".format(it) } ?: "--"}", color = Muted)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { positions = nudgeByMeters(track, positions, activeIndex, -5.0) }, modifier = Modifier.weight(1f)) { Text("◀ 5m") }
                 OutlinedButton(onClick = { positions = nudgeByMeters(track, positions, activeIndex, 5.0) }, modifier = Modifier.weight(1f)) { Text("5m ▶") }
