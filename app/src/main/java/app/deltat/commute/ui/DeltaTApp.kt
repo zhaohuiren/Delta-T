@@ -134,7 +134,7 @@ fun DeltaTApp(
                     onAutoPrepare = { withPermissions { nav.navigate("countdown") } },
                     onResume = {
                         if (runtime.mode == "BASELINE_RECORDING" && runtime.routeId != null) nav.navigate("baseline/${runtime.routeId}")
-                        else nav.navigate("timing")
+                        else nav.navigate("timing") { launchSingleTop = true }
                     },
                     onPermission = { withPermissions {} },
                     onRoute = { route ->
@@ -238,17 +238,22 @@ internal fun HomeScreen(
     onRoutes: () -> Unit, onAutoPrepare: () -> Unit, onResume: () -> Unit, onPermission: () -> Unit,
     onRoute: (RouteProfileEntity) -> Unit = { onRoutes() },
 ) {
-    val readyRoutes = routes.filter { it.activeCheckpointVersionId != null }
-    val bounds = remember(sessions) { comparisonPeriodBounds(System.currentTimeMillis()) }
-    val comparable = sessions.filter { row ->
-        val rowRoute = routes.firstOrNull { it.id == row.routeProfileId }
+    val readyRoutes = remember(routes) { routes.filter { it.activeCheckpointVersionId != null } }
+    val periodNow = rememberCalendarNowMillis()
+    val bounds = remember(sessions, periodNow) { comparisonPeriodBounds(maxOf(periodNow, System.currentTimeMillis())) }
+    val routesById = remember(routes) { routes.associateBy { it.id } }
+    val comparable = remember(sessions, routesById) { sessions.filter { row ->
+        val rowRoute = routesById[row.routeProfileId]
         row.validity == "VALID" && row.qualityGrade in setOf("A", "B") &&
             row.checkpointVersionId == rowRoute?.activeCheckpointVersionId && row.totalDurationNanos != null
-    }
-    val thisWeek = comparable.filter { it.startedWallTimeMillis in bounds.weekStartMillis until bounds.endExclusiveMillis }
-    val refreshedThisWeek = thisWeek.count { (it.weeklyDeltaNanos ?: 0L) < 0L }
+    } }
+    val thisWeek = remember(comparable, bounds) { comparable.filter { it.startedWallTimeMillis in bounds.weekStartMillis until bounds.endExclusiveMillis } }
+    val refreshedThisWeek = remember(thisWeek) { thisWeek.count { (it.weeklyDeltaNanos ?: 0L) < 0L } }
+    val routeGroups = remember(comparable) { comparable.groupBy { it.routeProfileId } }
+    val weeklyBests = remember(thisWeek) { thisWeek.groupBy { it.routeProfileId }.mapValues { (_, rows) -> rows.minByOrNull { it.totalDurationNanos ?: Long.MAX_VALUE } } }
+    val latestRows = remember(routeGroups) { routeGroups.mapValues { (_, rows) -> rows.maxByOrNull { it.startedWallTimeMillis } } }
     val active = runtime.mode != null && runtime.status != "IDLE" && runtime.engineStatus != EngineStatus.COMPLETED
-    val displayRoutes = routes.sortedBy { if (it.directionType == "TO_WORK") 0 else if (it.directionType == "FROM_WORK") 1 else 2 }
+    val displayRoutes = remember(routes) { routes.sortedBy { if (it.directionType == "TO_WORK") 0 else if (it.directionType == "FROM_WORK") 1 else 2 } }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -313,10 +318,8 @@ internal fun HomeScreen(
             Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(20.dp)) {
                 Column {
                     displayRoutes.take(2).forEachIndexed { index, route ->
-                        val routeRows = comparable.filter { it.routeProfileId == route.id }
-                        val weeklyBest = routeRows.filter { it.startedWallTimeMillis in bounds.weekStartMillis until bounds.endExclusiveMillis }
-                            .minByOrNull { it.totalDurationNanos ?: Long.MAX_VALUE }
-                        val latest = routeRows.maxByOrNull { it.startedWallTimeMillis }
+                        val weeklyBest = weeklyBests[route.id]
+                        val latest = latestRows[route.id]
                         HomeRouteRow(route, weeklyBest?.totalDurationNanos, latest?.totalDurationNanos) { onRoute(route) }
                         if (index < minOf(1, displayRoutes.lastIndex)) HorizontalDivider(color = Color(0xFF292D32))
                     }
@@ -693,25 +696,9 @@ internal fun TimingScreen(
     val active = runtime.mode in setOf("AUTO_ARMING", "TIMED")
     val completed = runtime.engineStatus == EngineStatus.COMPLETED
     val detecting = runtime.mode == "AUTO_ARMING" && runtime.routeId == null
-    val waitingAtA = runtime.engineStatus == EngineStatus.ARMED && runtime.routeId != null
+    val waitingAtA = runtime.engineStatus in setOf(EngineStatus.ARMED, EngineStatus.START_CANDIDATE) && runtime.routeId != null
     val beforeTiming = detecting || waitingAtA
-    val displayElapsedNanos by produceState(
-        runtime.elapsedNanos,
-        runtime.startedAtElapsedNanos,
-        runtime.elapsedNanos,
-        completed,
-    ) {
-        val startNanos = runtime.startedAtElapsedNanos
-        if (startNanos == null || completed || !animateClock) {
-            value = projectedElapsedNanos(startNanos, runtime.elapsedNanos, elapsedRealtimeNanos(), completed)
-        } else {
-            while (true) {
-                withFrameNanos {
-                    value = projectedElapsedNanos(startNanos, runtime.elapsedNanos, elapsedRealtimeNanos(), completed = false)
-                }
-            }
-        }
-    }
+    val fixState = rememberFixPresentation(runtime, elapsedRealtimeNanos)
     var confirmStop by remember { mutableStateOf(false) }
     var showRoutePicker by remember { mutableStateOf(false) }
     if (confirmStop) {
@@ -740,12 +727,13 @@ internal fun TimingScreen(
             confirmButton = { TextButton(onClick = { showRoutePicker = false }) { Text("取消") } },
         )
     }
-    if (detecting) {
-        DetectingRouteScreen(nav, runtime) { confirmStop = true }
-        return
-    }
-    if (waitingAtA) {
-        WaitingAtStartScreen(nav, runtime, { showRoutePicker = true }) { confirmStop = true }
+    if (beforeTiming) {
+        Surface(Modifier.fillMaxSize(), color = Background, contentColor = TelemetryWhite) {
+            Column(Modifier.fillMaxSize()) {
+                PageHeader(if (detecting) "准备路线" else "${runtime.routeName} · 准备", nav)
+                PreparedTimingContent(runtime, fixState, { showRoutePicker = true }) { confirmStop = true }
+            }
+        }
         return
     }
     Surface(Modifier.fillMaxSize(), color = Background, contentColor = TelemetryWhite) {
@@ -753,16 +741,16 @@ internal fun TimingScreen(
         PageHeader(if (completed) "COMPLETE" else if (runtime.mode == "AUTO_ARMING") "AUTO ROUTE" else "${route?.name ?: "计时"} · LIVE", nav)
         Column(
             Modifier.fillMaxSize()
-                .then(if (useScrollableAccessibilityLayout) Modifier.verticalScroll(accessibilityScrollState) else Modifier)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .verticalScroll(accessibilityScrollState)
+                .padding(horizontal = if (completed) 16.dp else 20.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                StatusPill(runtime.gnssHealth.displaySummary(), gnssStatusColor(runtime.gnssHealth.displayLabel()))
+            if (completed) Row { CompactGps(runtime) } else TimingStatusRow(runtime)
+            F1TimingBoard(runtime, route?.name ?: runtime.routeName.ifBlank { "计时" }, completed) {
+                LiveTimer(runtime, completed, elapsedRealtimeNanos, animateClock)
             }
-            F1TimingBoard(runtime, route?.name ?: runtime.routeName.ifBlank { "计时" }, completed, displayElapsedNanos)
-            TelemetryPanel(Modifier.fillMaxWidth()) {
+            if (completed) TelemetryPanel(Modifier.fillMaxWidth()) {
                 Row(verticalAlignment = Alignment.Bottom) {
                     TelemetryLabel("MAX")
                     Spacer(Modifier.width(10.dp))
@@ -780,34 +768,14 @@ internal fun TimingScreen(
                     )
                 }
             }
-            TelemetryRoute(
-                points = runtime.track,
-                referencePoints = runtime.monthlyReferenceTrack.ifEmpty { runtime.referenceTrack },
-                routeSourcePoints = runtime.routeSourceTrack,
-                checkpoints = runtime.routeCheckpoints,
-                currentFix = runtime.lastFix,
-                referencePassElapsedNanos = runtime.monthlyReferencePassElapsedNanos.ifEmpty { runtime.checkpointPassElapsedNanos },
-                actualPassElapsedNanos = runtime.actualPassElapsedNanos,
-                sectorColors = (0..2).map { runtime.sectors.getOrNull(it)?.color ?: ResultColor.NEUTRAL },
-                cameraPolicy = MapCameraPolicy.FULL_ROUTE_LOCKED,
-                modifier = if (useScrollableAccessibilityLayout) {
-                    Modifier.fillMaxWidth().aspectRatio(1.24f)
-                } else {
-                    Modifier.fillMaxWidth().weight(1f).heightIn(min = 230.dp, max = 340.dp)
-                },
-            )
-            if (runtime.engineStatus == EngineStatus.ARMED && runtime.routeId != null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("已识别：${runtime.routeName} · 距离 A ${runtime.routeDetectionDistanceMeters?.let { "%.0f m".format(it) } ?: "--"}", color = Muted, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { showRoutePicker = true }) { Text("更换路线") }
-                }
-            }
+            TimingMap(runtime, fixState, if (completed) app.deltat.commute.map.MapPhase.COMPLETE else app.deltat.commute.map.MapPhase.TIMING,
+                Modifier.fillMaxWidth().aspectRatio(TIMING_MAP_ASPECT))
             when {
                 completed && runtime.sessionId != null -> Button(onClick = { nav.navigate("detail/${runtime.sessionId}?source=timing") }, modifier = Modifier.fillMaxWidth()) { Text("查看本次详情") }
                 active -> OutlinedButton(onClick = { confirmStop = true }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF7777))) { Text("结束本次（成绩无效）") }
                 else -> Button(onClick = start, modifier = Modifier.fillMaxWidth()) { Text("一键准备") }
             }
-            Text("可锁屏继续 · 驾驶中无需点击", color = Muted)
+            Text("可锁屏继续 · 驾驶中无需点击", color = Muted, fontSize = 12.sp)
         }
       }
     }
@@ -869,7 +837,7 @@ private fun F1TimingBoard(
     runtime: app.deltat.commute.location.RuntimeSnapshot,
     routeName: String,
     completed: Boolean,
-    displayElapsedNanos: Long,
+    timer: @Composable () -> Unit,
 ) {
     val sectorHeight = 136.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.3f)
     val shape = RoundedCornerShape(18.dp)
@@ -877,7 +845,7 @@ private fun F1TimingBoard(
     val hasMonthlyReference = runtime.monthlyReferenceTrack.isNotEmpty() || runtime.monthlyDeltaNanos != null
     val hasWeeklyReference = runtime.weeklyReferenceTrack.isNotEmpty() || runtime.weeklyDeltaNanos != null
     Column(Modifier.fillMaxWidth().clip(shape).background(Color(0xFF0C0F14)).border(1.dp, Color(0xFF3A3F45), shape)) {
-        Row(Modifier.fillMaxWidth().height(46.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (completed) Row(Modifier.fillMaxWidth().height(46.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.fillMaxHeight().width(50.dp).background(RacingRed), contentAlignment = Alignment.Center) {
                 Text(if (completed) "OK" else "S${runtime.currentSector.coerceIn(1, 3)}", color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black, fontSize = 17.sp)
             }
@@ -885,9 +853,9 @@ private fun F1TimingBoard(
             TelemetryLabel(stateLabel, RacingRed)
             Spacer(Modifier.width(14.dp))
         }
-        Box(Modifier.fillMaxWidth().height(2.dp).background(RacingRed))
-        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(formatDuration(displayElapsedNanos), Modifier.testTag("live-timer"), fontSize = 47.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, maxLines = 1)
+        if (completed) Box(Modifier.fillMaxWidth().height(2.dp).background(RacingRed))
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            timer()
             PeriodDeltaRow(
                 label = "月",
                 delta = runtime.monthlyDeltaNanos,
@@ -910,7 +878,8 @@ private fun F1TimingBoard(
             )
             if (runtime.deltaConfidence == DeltaConfidence.HELD) Text("暂时无法匹配 · 保留最近确认值", color = Muted, fontSize = 11.sp)
         }
-        Row(Modifier.fillMaxWidth().height(sectorHeight), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        HorizontalDivider(color = Color(0xFF343940), thickness = 1.dp)
+        Row(Modifier.fillMaxWidth().then(if (completed) Modifier.height(sectorHeight) else Modifier), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             (0..2).forEach { index ->
                 val sector = runtime.sectors.getOrNull(index)
                 val current = runtime.currentSector - 1 == index && !completed
@@ -923,7 +892,7 @@ private fun F1TimingBoard(
                     runtime.currentSectorColor,
                     hasMonthlyReference,
                     hasWeeklyReference,
-                    Modifier.weight(1f),
+                    Modifier.weight(1f), compact = !completed,
                 )
             }
         }
@@ -932,10 +901,9 @@ private fun F1TimingBoard(
 
 @Composable
 private fun PeriodDeltaRow(label: String, delta: Long?, bestColor: Color, status: String) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+    FlowRow(Modifier.fillMaxWidth().heightIn(min = 23.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text("$label Δ ${delta?.let(::formatDelta) ?: "--"}", color = periodDeltaColor(delta, bestColor), fontSize = 17.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-        Spacer(Modifier.weight(1f))
-        Text(status, color = Muted, fontSize = 10.sp, maxLines = 1)
+        Text(status, color = Muted, fontSize = 11.sp)
     }
 }
 
@@ -950,6 +918,7 @@ private fun F1SectorCell(
     hasMonthlyReference: Boolean,
     hasWeeklyReference: Boolean,
     modifier: Modifier,
+    compact: Boolean = false,
 ) {
     val resultColor = sector?.color
     val accent = when {
@@ -958,97 +927,27 @@ private fun F1SectorCell(
         else -> Color(0xFF4C5158)
     }
     val fill = Color(0xFF111419)
-    val duration = sector?.durationNanos?.let(::formatDuration) ?: if (current) "LIVE" else "--"
+    val duration = sector?.durationNanos?.let(::formatDuration) ?: if (compact) { if (current) "计时中" else "未开始" } else if (current) "LIVE" else "--"
     val monthDelta = sector?.monthlyDeltaNanos ?: sector?.deltaNanos ?: if (current) liveMonthlyDeltaNanos else null
     val weekDelta = sector?.weeklyDeltaNanos ?: if (current) liveWeeklyDeltaNanos else null
     val status = if (current) "计时中" else if (sector != null) "已完成" else "未开始"
     val cellShape = RoundedCornerShape(bottomStart = if (index == 0) 16.dp else 4.dp, bottomEnd = if (index == 2) 16.dp else 4.dp)
     Column(
-        modifier.testTag("sector-card-S${index + 1}").fillMaxHeight().clip(cellShape).background(fill)
+        modifier.testTag("sector-card-S${index + 1}").then(if (compact) Modifier else Modifier.fillMaxHeight()).clip(cellShape).background(fill)
             .then(if (current) Modifier.border(1.5.dp, RacingRed, cellShape) else Modifier),
     ) {
         Column(
-            Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier.then(if (compact) Modifier else Modifier.weight(1f)).fillMaxWidth().padding(horizontal = if (compact) 4.dp else 8.dp, vertical = if (compact) 6.dp else 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceEvenly,
+            verticalArrangement = if (compact) Arrangement.spacedBy(2.dp) else Arrangement.SpaceEvenly,
         ) {
-            Text("S${index + 1}", color = if (current) RacingRed else accent, fontWeight = FontWeight.Black, fontSize = 16.sp)
-            Text(duration, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1)
-            Text("月 ${monthDelta?.let(::formatDelta) ?: "--"}", color = periodDeltaColor(monthDelta, Purple), fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1)
-            Text("周 ${weekDelta?.let(::formatDelta) ?: "--"}", color = periodDeltaColor(weekDelta, Green), fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1)
-            Text(status, color = if (sector != null || current) TelemetryWhite.copy(alpha = .78f) else Muted, fontSize = 12.sp, maxLines = 1)
+            Text("S${index + 1}${if (compact && sector != null) " ✓" else ""}", color = if (current) RacingRed else accent, fontWeight = FontWeight.Black, fontSize = 16.sp)
+            Text(duration, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = if (compact) 16.sp else 15.sp)
+            Text("月 ${monthDelta?.let(::formatDelta) ?: "--"}", color = periodDeltaColor(monthDelta, Purple), fontFamily = FontFamily.Monospace, fontSize = if (compact) 12.sp else 11.sp)
+            Text("周 ${weekDelta?.let(::formatDelta) ?: "--"}", color = periodDeltaColor(weekDelta, Green), fontFamily = FontFamily.Monospace, fontSize = if (compact) 12.sp else 11.sp)
+            if (!compact) Text(status, color = if (sector != null || current) TelemetryWhite.copy(alpha = .78f) else Muted, fontSize = 12.sp, maxLines = 1)
         }
-        Box(Modifier.fillMaxWidth().height(4.dp).background(if (sector != null || current) accent else Color(0xFF4C5158)))
-    }
-}
-
-@Composable
-private fun DetectingRouteScreen(nav: NavController, runtime: app.deltat.commute.location.RuntimeSnapshot, onCancel: () -> Unit) {
-    Surface(Modifier.fillMaxSize(), color = Background, contentColor = TelemetryWhite) {
-        Column(Modifier.fillMaxSize()) {
-            PageHeader("AUTO ROUTE", nav)
-            Column(
-                Modifier.fillMaxSize().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.SpaceBetween,
-            ) {
-                StatusPill(runtime.gnssHealth.displaySummary(), gnssStatusColor(runtime.gnssHealth.displayLabel()))
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    CircularProgressIndicator(color = RacingRed)
-                    TelemetryLabel("AUTO ROUTE", RacingRed)
-                    Text("正在识别最近路线", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    Text("首个精度合格定位点到达后自动选择最近的起点 A", color = Muted, textAlign = TextAlign.Center)
-                }
-                OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF7777))) { Text("取消准备") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun WaitingAtStartScreen(
-    nav: NavController,
-    runtime: app.deltat.commute.location.RuntimeSnapshot,
-    onSwitchRoute: () -> Unit,
-    onCancel: () -> Unit,
-) {
-    Surface(Modifier.fillMaxSize(), color = Background, contentColor = TelemetryWhite) {
-        Column(Modifier.fillMaxSize()) {
-            PageHeader("AUTO ROUTE", nav)
-            Column(
-                Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    StatusPill(runtime.gnssHealth.displaySummary(), gnssStatusColor(runtime.gnssHealth.displayLabel()))
-                    Spacer(Modifier.weight(1f))
-                    TelemetryLabel("WAITING A", RacingRed)
-                }
-                TelemetryPanel(Modifier.fillMaxWidth()) {
-                    TelemetryLabel("已识别路线", RacingRed)
-                    Text(runtime.routeName, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(12.dp))
-                    TelemetryLabel("距离起点 A")
-                    Text(runtime.routeDetectionDistanceMeters?.let { "%.0f m".format(it) } ?: "--", fontSize = 46.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                    Text("驶过 A 后自动开始正式计时", color = Muted)
-                }
-                TelemetryRoute(
-                    points = runtime.track,
-                    referencePoints = runtime.referenceTrack,
-                    routeSourcePoints = runtime.routeSourceTrack,
-                    checkpoints = runtime.routeCheckpoints,
-                    currentFix = runtime.lastFix,
-                    referencePassElapsedNanos = runtime.checkpointPassElapsedNanos,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = onSwitchRoute, modifier = Modifier.weight(1f)) { Text("更换路线") }
-                    OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF7777))) { Text("取消准备") }
-                }
-                Text("计时尚未开始 · 可锁屏等待", color = Muted)
-            }
-        }
+        Box(Modifier.fillMaxWidth().height(if (compact) 3.dp else 4.dp).background(if (sector != null || current) accent else Color(0xFF4C5158)))
     }
 }
 
@@ -1060,25 +959,7 @@ private fun HistoryScreen(
     viewModel: AppViewModel,
 ) {
     val historyListState = androidx.compose.foundation.lazy.rememberLazyListState()
-    var periodNowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) periodNowMillis = System.currentTimeMillis()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    LaunchedEffect(Unit) {
-        while (true) {
-            val now = System.currentTimeMillis()
-            val zone = ZoneId.systemDefault()
-            val nextDay = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().plusDays(1)
-                .atStartOfDay(zone).toInstant().toEpochMilli()
-            delay((nextDay - now + 250L).coerceAtLeast(1_000L))
-            periodNowMillis = System.currentTimeMillis()
-        }
-    }
+    val periodNowMillis = rememberCalendarNowMillis()
     var pendingDelete by remember { mutableStateOf<SessionListRow?>(null) }
     pendingDelete?.let { session ->
         val isRouteSource = routes.firstOrNull { it.id == session.routeProfileId }?.referenceSessionId == session.id
@@ -1099,15 +980,15 @@ private fun HistoryScreen(
             dismissButton = if (isRouteSource) null else ({ TextButton(onClick = { pendingDelete = null }) { Text("取消") } }),
         )
     }
-    val bounds = remember(sessions, periodNowMillis) { comparisonPeriodBounds(periodNowMillis) }
-    val eligible = sessions.filter { row ->
-        val route = routes.firstOrNull { it.id == row.routeProfileId }
-        isCurrentRecordEligible(row, route?.activeCheckpointVersionId)
-    }
-    val monthBestIds = eligible.filter { it.startedWallTimeMillis in bounds.monthStartMillis until bounds.endExclusiveMillis }
-        .groupBy { it.routeProfileId }.mapValues { (_, rows) -> rows.minWithOrNull(compareBy<SessionListRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.id })?.id }
-    val weekBestIds = eligible.filter { it.startedWallTimeMillis in bounds.weekStartMillis until bounds.endExclusiveMillis }
-        .groupBy { it.routeProfileId }.mapValues { (_, rows) -> rows.minWithOrNull(compareBy<SessionListRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.id })?.id }
+    val bounds = remember(sessions, periodNowMillis) { comparisonPeriodBounds(maxOf(periodNowMillis, System.currentTimeMillis())) }
+    val routesById = remember(routes) { routes.associateBy { it.id } }
+    val eligible = remember(sessions, routesById) { sessions.filter { row ->
+        isCurrentRecordEligible(row, routesById[row.routeProfileId]?.activeCheckpointVersionId)
+    } }
+    val monthBestIds = remember(eligible, bounds) { eligible.filter { it.startedWallTimeMillis in bounds.monthStartMillis until bounds.endExclusiveMillis }
+        .groupBy { it.routeProfileId }.mapValues { (_, rows) -> rows.minWithOrNull(compareBy<SessionListRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.id })?.id } }
+    val weekBestIds = remember(eligible, bounds) { eligible.filter { it.startedWallTimeMillis in bounds.weekStartMillis until bounds.endExclusiveMillis }
+        .groupBy { it.routeProfileId }.mapValues { (_, rows) -> rows.minWithOrNull(compareBy<SessionListRow> { it.totalDurationNanos }.thenBy { it.startedWallTimeMillis }.thenBy { it.id })?.id } }
     Column(Modifier.fillMaxSize()) {
         PageHeader("历史记录")
         if (sessions.isEmpty()) EmptyState("还没有行程", "完成路线录制或日常计时后会显示在这里")
@@ -1115,7 +996,7 @@ private fun HistoryScreen(
             items(sessions, key = { it.id }) { session ->
                 val isMonthBest = monthBestIds[session.routeProfileId] == session.id
                 val isWeekBest = weekBestIds[session.routeProfileId] == session.id
-                val activeVersionId = routes.firstOrNull { it.id == session.routeProfileId }?.activeCheckpointVersionId
+                val activeVersionId = routesById[session.routeProfileId]?.activeCheckpointVersionId
                 val isEligible = isCurrentRecordEligible(session, activeVersionId)
                 HistoryRecordCard(
                     session = session,
@@ -1195,7 +1076,7 @@ private fun SmallPeriodTag(text: String, color: Color) {
     Text(text, color = color, fontSize = 10.sp, modifier = Modifier.background(color.copy(alpha = .13f), RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 3.dp))
 }
 
-private fun gnssStatusColor(label: String): Color = when {
+internal fun gnssStatusColor(label: String): Color = when {
     label.contains("良好") -> Green
     label.contains("一般") -> Yellow
     label.contains("弱") || label.contains("关闭") -> Color(0xFFFF7777)

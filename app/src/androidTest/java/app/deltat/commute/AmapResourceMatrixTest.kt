@@ -52,7 +52,10 @@ class AmapResourceMatrixTest {
                     val p = points[index]
                     MapCheckpoint(listOf("A", "S1", "S2", "B")[i], i, p.latitude, p.longitude, 35.0, i in 1..2)
                 }
-                for ((widthDp, ratio) in listOf(300 to 1.24f, 360 to 1.24f, 400 to 1.24f, 300 to 1.69f, 360 to 1.69f, 400 to 1.69f)) {
+                for ((widthDp, ratio) in listOf(300 to 1.0145833f, 360 to 1.0145833f, 400 to 1.0145833f, 300 to 1.69f, 360 to 1.69f, 400 to 1.69f)) {
+                    val scene = MapScene(points, points, checkpoints, points[2_666].copy(speedMetersPerSecond = 15.0, bearingDegrees = 90.0),
+                        listOf(0L, 1_333_000_000_000L, 2_666_000_000_000L, 3_999_000_000_000L),
+                        listOf(ResultColor.PURPLE, ResultColor.GREEN, ResultColor.YELLOW), MapCameraPolicy.FULL_ROUTE_LOCKED)
                     val controller = construct()
                     lateinit var view: View
                     onMain {
@@ -60,11 +63,10 @@ class AmapResourceMatrixTest {
                         val density = activity.resources.displayMetrics.density
                         holder.addView(view, FrameLayout.LayoutParams((widthDp * density).toInt(), (widthDp / ratio * density).toInt()))
                         call(controller, "onResume")
+                        // Deliver scene before the first layout: no later GPS update should be required to frame it.
+                        call(controller, "update", scene)
                     }
                     Thread.sleep(350)
-                    val scene = MapScene(points, points, checkpoints, points[2_666].copy(speedMetersPerSecond = 15.0, bearingDegrees = 90.0),
-                        listOf(0L, 1_333_000_000_000L, 2_666_000_000_000L, 3_999_000_000_000L),
-                        listOf(ResultColor.PURPLE, ResultColor.GREEN, ResultColor.YELLOW), MapCameraPolicy.FULL_ROUTE_LOCKED)
                     onMain { call(controller, "update", scene) }
                     Thread.sleep(450)
                     onMain {
@@ -100,6 +102,11 @@ class AmapResourceMatrixTest {
                         assertTrue("$shape/$widthDp 所有路线点须在视口安全区", allInside)
                         val markers = field(controller, "checkpointMarkers") as Map<*, *>
                         assertEquals(4, markers.size)
+                        val anchors = field(controller, "anchorMarkers") as Map<*, *>
+                        assertEquals(4, anchors.size)
+                        markers.forEach { (key, value) -> assertEquals((value as Marker).position, (anchors[key] as Marker).position) }
+                        val position = map.projection.toScreenLocation((field(controller, "positionMarker") as Marker).position)
+                        assertTrue(position.x in 0..view.width && position.y in 0..view.height)
                         val density = activity.resources.displayMetrics.density
                         val centers = markers.values.map { value ->
                             val marker = value as Marker

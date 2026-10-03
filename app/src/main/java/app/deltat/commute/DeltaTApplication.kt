@@ -39,7 +39,7 @@ class DeltaTApplication : Application() {
                 repository.rebuildEvaluationComparisonHistory()
                 bootstrap.edit().putBoolean("comparison_rules_v3_backfilled", true).apply()
             }
-            repository.prepareTimingEngineV3Upgrade()
+            repository.prepareTimingEngineUpgrade()
             repository.runPendingRecalculations()
             delay(2_000)
             val active = repository.activeSession()

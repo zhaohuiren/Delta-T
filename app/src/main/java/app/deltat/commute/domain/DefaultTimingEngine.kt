@@ -18,13 +18,16 @@ class DefaultTimingEngine : TimingEngine {
             return reject(state, fix, "计时点必须是 A、S1、S2、B")
         }
         if (fix.isMock) return reject(state, fix, "检测到模拟定位", keepPrevious = true)
-        if (fix.accuracyMeters > 50.0) return reject(state, fix, "精度低于门槛")
+        if (!fix.accuracyMeters.isFinite() || fix.accuracyMeters < 0 || fix.accuracyMeters > 50.0) return reject(state, fix, "精度低于门槛")
         val previous = state.previousFix
         if (previous != null && fix.elapsedRealtimeNanos <= previous.elapsedRealtimeNanos) {
             return reject(state, fix, "单调时间无效", keepPrevious = true)
         }
         if (previous != null) {
             val seconds = (fix.elapsedRealtimeNanos - previous.elapsedRealtimeNanos) / 1_000_000_000.0
+            if (seconds > MAX_INTERPOLATION_GAP_SECONDS) {
+                return processFix(state.copy(previousFix = null, candidate = null, progressLineCandidates = emptyList(), status = waitingStatus(state.nextCheckpointIndex)), fix, ordered)
+            }
             val distance = Geometry.distanceMeters(previous.latitude, previous.longitude, fix.latitude, fix.longitude)
             if (seconds > 0 && distance / seconds > 80.0) return reject(state, fix, "位置跳跃", keepPrevious = true)
         }
@@ -36,7 +39,7 @@ class DefaultTimingEngine : TimingEngine {
             ordered.first().latitude, ordered.first().longitude,
             ordered.last().latitude, ordered.last().longitude,
         )
-        var working = state.copy(candidate = null)
+        var working = state
         val events = mutableListOf<EngineEvent>()
 
         val updatedCandidates = working.progressLineCandidates.mapNotNull { candidate ->
@@ -94,7 +97,7 @@ class DefaultTimingEngine : TimingEngine {
         }
 
         return EngineTransition(
-            newState = working.copy(previousFix = fix, status = waitingStatus(working.nextCheckpointIndex)),
+            newState = working.copy(previousFix = fix, status = if (working.candidate != null) EngineStatus.FINISH_CANDIDATE else waitingStatus(working.nextCheckpointIndex)),
             emittedEvents = events,
             persistenceUrgent = events.isNotEmpty(),
         )
@@ -147,7 +150,8 @@ class DefaultTimingEngine : TimingEngine {
         }
         return EngineTransition(
             state.copy(
-                previousFix = fix, candidate = null, status = waitingStatus(state.nextCheckpointIndex),
+                previousFix = fix, candidate = candidate,
+                status = if (candidate != null) candidateStatus(checkpoint.orderIndex) else waitingStatus(state.nextCheckpointIndex),
                 startRequiresExit = if (checkpoint.orderIndex == 0) state.startRequiresExit ?: false else state.startRequiresExit,
             ),
         )
@@ -192,7 +196,7 @@ class DefaultTimingEngine : TimingEngine {
     }
 
     private fun reject(state: EngineState, fix: LocationFix, reason: String, keepPrevious: Boolean = false) = EngineTransition(
-        newState = state.copy(previousFix = if (keepPrevious) state.previousFix else fix, rejectedFixes = state.rejectedFixes + 1),
+        newState = state.copy(previousFix = if (keepPrevious) state.previousFix else null, candidate = null, progressLineCandidates = emptyList(), status = waitingStatus(state.nextCheckpointIndex), rejectedFixes = state.rejectedFixes + 1),
         emittedEvents = listOf(EngineEvent.FixRejected(reason)),
     )
 
@@ -211,7 +215,8 @@ class DefaultTimingEngine : TimingEngine {
     }
 
     companion object {
-        const val TIMING_ENGINE_VERSION = 3
+        const val TIMING_ENGINE_VERSION = 4
+        private const val MAX_INTERPOLATION_GAP_SECONDS = 10.0
         private const val REQUIRED_BEYOND_FIXES = 3
         private const val REQUIRED_DEPTH_METERS = 25.0
     }

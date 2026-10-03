@@ -106,6 +106,56 @@ class FullAppUiFlowTest {
         composeRule.onNodeWithText("准备出发").assertExists()
     }
 
+    @Test fun nativeMapRepeatedReturnPreservesRecordsAndReleasesRenderer() {
+        composeRule.activityRule.scenario.onActivity { androidx.lifecycle.ViewModelProvider(it)[app.deltat.commute.ui.AppViewModel::class.java].agreeToAmapPrivacy() }
+        composeRule.activityRule.scenario.recreate()
+        composeRule.onNodeWithText("纪录").performClick()
+        composeRule.onNodeWithText("全部").performClick()
+        val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        val output = java.io.File(application.getExternalFilesDir(null), "native-return").apply { mkdirs() }
+        fun gesture(cancel: Boolean) {
+            val start = android.os.SystemClock.uptimeMillis()
+            val positions = if (cancel) listOf(1f, 45f, 100f, 200f, 100f, 20f, 1f) else listOf(1f, 45f, 100f, 200f, 350f, 500f)
+            positions.forEachIndexed { index, x ->
+                val action = when (index) { 0 -> android.view.MotionEvent.ACTION_DOWN; positions.lastIndex -> if (cancel) android.view.MotionEvent.ACTION_CANCEL else android.view.MotionEvent.ACTION_UP; else -> android.view.MotionEvent.ACTION_MOVE }
+                val event = android.view.MotionEvent.obtain(start, android.os.SystemClock.uptimeMillis(), action, x, 1000f, 0)
+                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                instrumentation.uiAutomation.injectInputEvent(event, true); event.recycle(); Thread.sleep(45)
+            }
+        }
+        repeat(6) { round ->
+            composeRule.onNodeWithTag("leaderboard-P2").performScrollTo().performClick()
+            if (composeRule.onAllNodesWithText("同意并启用").fetchSemanticsNodes().isNotEmpty()) composeRule.onNodeWithText("同意并启用").performClick()
+            composeRule.onNodeWithTag("route-map").assertExists()
+            Thread.sleep(500)
+            if (round == 4) {
+                gesture(true)
+                composeRule.waitForIdle()
+                composeRule.onNodeWithTag("route-map").assertExists()
+            }
+            if (round == 5) gesture(false)
+            else if (round % 2 == 0) {
+                val bounds = composeRule.onNodeWithContentDescription("返回").fetchSemanticsNode().boundsInWindow
+                val now = android.os.SystemClock.uptimeMillis()
+                listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP).forEach { action ->
+                    android.view.MotionEvent.obtain(now, now + action * 20L, action, bounds.center.x, bounds.center.y, 0).also {
+                        instrumentation.uiAutomation.injectInputEvent(it, true); it.recycle()
+                    }
+                }
+            } else instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+            repeat(5) { frame ->
+                instrumentation.uiAutomation.takeScreenshot().let { bitmap ->
+                    java.io.File(output, "return-$round-$frame.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
+                }
+                Thread.sleep(40)
+            }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag("period-全部").assertIsSelected()
+            composeRule.onNodeWithTag("leaderboard-P2").assertExists()
+            composeRule.onNodeWithTag("route-map").assertDoesNotExist()
+        }
+    }
+
     @Test fun activityRecreationPreservesRecordsFilterRouteAndDetailBackStack() {
         composeRule.onNodeWithText("纪录").performClick()
         composeRule.onNodeWithText("全部").performClick()
@@ -277,7 +327,7 @@ class FullAppUiFlowTest {
         recordQualified = true,
         monthlyDeltaNanos = monthlyDelta,
         weeklyDeltaNanos = weeklyDelta,
-        timingEngineVersion = 3,
+        timingEngineVersion = app.deltat.commute.domain.DefaultTimingEngine.TIMING_ENGINE_VERSION,
         createdAtMillis = createdAt,
         updatedAtMillis = createdAt,
     )

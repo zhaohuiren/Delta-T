@@ -40,7 +40,7 @@ fun comparisonPeriodBounds(nowMillis: Long, zone: ZoneId = ZoneId.systemDefault(
     val now = Instant.ofEpochMilli(nowMillis).atZone(zone)
     val monthStartDate = now.toLocalDate().withDayOfMonth(1)
     val naturalWeekStart = now.toLocalDate().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-    val clippedWeekStart = maxOf(monthStartDate, naturalWeekStart)
+    val clippedWeekStart = naturalWeekStart
     return ComparisonPeriodBounds(
         monthStartDate.atStartOfDay(zone).toInstant().toEpochMilli(),
         clippedWeekStart.atStartOfDay(zone).toInstant().toEpochMilli(),
@@ -121,7 +121,7 @@ class AppRepository(private val database: DeltaTDatabase) {
 
     suspend fun readyRouteCandidates(): List<RouteCandidate> = routes.first().mapNotNull { route ->
         val checkpoints = checkpointsForRoute(route.id)
-        checkpoints.takeIf { it.size == 4 }?.let { RouteCandidate(route.id, route.name, route.createdAtMillis, it) }
+        checkpoints.takeIf { app.deltat.commute.domain.validCheckpointSequence(it) }?.let { RouteCandidate(route.id, route.name, route.createdAtMillis, it) }
     }
 
     suspend fun comparisonBenchmarksForTiming(routeId: String, nowMillis: Long = System.currentTimeMillis()): TimingBenchmarks? {
@@ -424,7 +424,7 @@ class AppRepository(private val database: DeltaTDatabase) {
                 monthlyDeltaNanos = monthlyBest?.let { total - it },
                 weeklyDeltaNanos = weeklyBest?.let { total - it },
                 totalResultColor = totalColor.name,
-                comparisonRulesVersion = 3,
+                comparisonRulesVersion = 4,
                 missingCheckpointMask = state.missedCheckpointIndices.fold(0) { mask, index -> mask or (1 shl index) },
                 timingEngineVersion = DefaultTimingEngine.TIMING_ENGINE_VERSION,
             ),
@@ -459,7 +459,7 @@ class AppRepository(private val database: DeltaTDatabase) {
                         weeklyBestDurationNanos = week,
                         monthlyDeltaNanos = month?.let { sector.durationNanos - it },
                         weeklyDeltaNanos = week?.let { sector.durationNanos - it },
-                        comparisonRulesVersion = 3,
+                        comparisonRulesVersion = 4,
                     ),
                 )
             }
@@ -475,7 +475,7 @@ class AppRepository(private val database: DeltaTDatabase) {
                     monthlyDeltaNanos = month?.let { total - it },
                     weeklyDeltaNanos = week?.let { total - it },
                     totalResultColor = RecordJudge.periodColor(total, month, week, grade, uncertainty).name,
-                    comparisonRulesVersion = 3,
+                    comparisonRulesVersion = 4,
                 ),
             )
         }
@@ -487,7 +487,7 @@ class AppRepository(private val database: DeltaTDatabase) {
         }
     }
 
-    suspend fun prepareTimingEngineV3Upgrade() {
+    suspend fun prepareTimingEngineUpgrade() {
         routes.first().forEach { route -> historicalRecalculator.createEngineUpgrade(route.id) }
     }
 

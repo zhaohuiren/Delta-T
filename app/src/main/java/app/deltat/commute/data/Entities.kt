@@ -1,5 +1,6 @@
 package app.deltat.commute.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -25,6 +26,7 @@ data class CheckpointVersionEntity(
     val createdAtMillis: Long,
     val active: Boolean,
     val changeReason: String,
+    @ColumnInfo(defaultValue = "0") val timingEngineVersion: Int = 0,
 )
 
 @Entity(tableName = "checkpoints", indices = [Index(value = ["checkpointVersionId", "orderIndex"], unique = true)])
@@ -40,6 +42,7 @@ data class CheckpointEntity(
     val bearingTolerance: Double,
     val gateHalfWidthMeters: Double,
     val sourceTrackPointId: Long?,
+    val sourceElapsedNanos: Long? = null,
 )
 
 @Entity(tableName = "sessions", indices = [Index("routeProfileId"), Index("status"), Index("startedWallTimeMillis")])
@@ -73,7 +76,7 @@ data class SessionEntity(
     val monthlyDeltaNanos: Long? = null,
     val weeklyDeltaNanos: Long? = null,
     val totalResultColor: String = "NEUTRAL",
-    val comparisonRulesVersion: Int = 3,
+    val comparisonRulesVersion: Int = 4,
     val missingCheckpointMask: Int = 0,
     val timingEngineVersion: Int = 1,
     val createdAtMillis: Long,
@@ -127,7 +130,7 @@ data class SectorResultEntity(
     val weeklyBestDurationNanos: Long? = null,
     val monthlyDeltaNanos: Long? = null,
     val weeklyDeltaNanos: Long? = null,
-    val comparisonRulesVersion: Int = 3,
+    val comparisonRulesVersion: Int = 4,
 )
 
 @Entity(
@@ -156,7 +159,7 @@ data class SessionEvaluationEntity(
     val monthlyDeltaNanos: Long? = null,
     val weeklyDeltaNanos: Long? = null,
     val totalResultColor: String = "NEUTRAL",
-    val comparisonRulesVersion: Int = 3,
+    val comparisonRulesVersion: Int = 4,
     val timingEngineVersion: Int = 1,
     val missingCheckpointMask: Int = 0,
     val createdAtMillis: Long,
@@ -196,7 +199,7 @@ data class EvaluationSectorEntity(
     val weeklyDeltaNanos: Long? = null,
     val resultColorAtCompletion: String = "NEUTRAL",
     val recordQualified: Boolean = false,
-    val comparisonRulesVersion: Int = 3,
+    val comparisonRulesVersion: Int = 4,
 )
 
 @Entity(

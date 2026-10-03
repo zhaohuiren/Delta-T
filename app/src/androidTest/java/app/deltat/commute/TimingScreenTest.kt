@@ -60,13 +60,13 @@ class TimingScreenTest {
             }
         }
 
-        composeRule.onNodeWithText("正在识别最近路线").assertExists()
-        composeRule.onNodeWithText("首个精度合格定位点到达后自动选择最近的起点 A").assertExists()
+        composeRule.onNodeWithText("等待有效定位").assertExists()
+        composeRule.onNodeWithText("获得有效定位后，自动识别最近路线").assertExists()
         saveScreenshot("timing-mock-detecting.png")
 
         composeRule.runOnIdle { runtime.value = waitingSnapshot() }
-        composeRule.onNodeWithText("WAITING A").assertExists()
-        composeRule.onNodeWithText("已识别路线").assertExists()
+        composeRule.onNodeWithText("等待驶过起点 A").assertExists()
+        composeRule.onNodeWithText("确认驶过 A 后自动开始计时").assertExists()
         composeRule.onNodeWithText("128 m").assertExists()
         composeRule.onNodeWithText("更换路线").assertExists()
         composeRule.onNodeWithText("取消准备").performClick()
@@ -81,7 +81,7 @@ class TimingScreenTest {
             runtime.value = liveSnapshot()
             fakeElapsedRealtimeNanos = requireNotNull(runtime.value.startedAtElapsedNanos) + runtime.value.elapsedNanos
         }
-        composeRule.onNodeWithText("实时 S2").assertExists()
+        composeRule.onNodeWithText("上班 · LIVE").assertExists()
         composeRule.onNodeWithText("18:42.60").assertExists()
         composeRule.onNodeWithText("周 Δ −00:08.40").assertExists()
         composeRule.onNodeWithText("月 Δ +00:02.40").assertExists()
@@ -188,7 +188,7 @@ class TimingScreenTest {
         composeRule.onNodeWithText("计时中").assertIsDisplayed()
         val mapBounds = composeRule.onNodeWithTag("abstract-route-map").fetchSemanticsNode().boundsInRoot
         val aspectRatio = mapBounds.width / mapBounds.height
-        assertTrue("地图不能再次退化为横向扁条", aspectRatio in 1.15f..1.40f)
+        assertTrue("地图不能再次退化为横向扁条", aspectRatio in 1.00f..1.03f)
     }
 
     @Test fun gpsCountsAreVisibleAndRefreshThroughDetectingWaitingAndLiveStates() {
@@ -222,7 +222,7 @@ class TimingScreenTest {
         sessionId = "waiting", routeId = "work", routeName = "上班",
         routeDetectionDistanceMeters = 128.0, mode = "AUTO_ARMING", status = "等待驶过起点 A",
         engineStatus = EngineStatus.ARMED, gnssHealth = goodGnss(), track = track().take(3),
-        routeSourceTrack = track(), routeCheckpoints = checkpoints(),
+        routeSourceTrack = track(), routeCheckpoints = checkpoints(), lastFix = track().first(),
     )
 
     private fun liveSnapshot(): RuntimeSnapshot {

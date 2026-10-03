@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,7 +64,8 @@ fun TelemetryRecordsScreen(
     var customStartIso by rememberSaveable { mutableStateOf<String?>(null) }
     var customEndIso by rememberSaveable { mutableStateOf<String?>(null) }
     var showDateRange by rememberSaveable { mutableStateOf(false) }
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val listStates = rememberSaveableStateHolder()
+    val statisticsState = rememberSaveableStateHolder()
     val tab = RecordsTab.entries.firstOrNull { it.name == tabName } ?: RecordsTab.LEADERBOARD
     val customRange = remember(customStartIso, customEndIso) {
         runCatching {
@@ -83,6 +85,7 @@ fun TelemetryRecordsScreen(
     }
 
     var calendarNowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(leaderboard) { calendarNowMillis = System.currentTimeMillis() }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -120,10 +123,6 @@ fun TelemetryRecordsScreen(
         }
     }
     val theoreticalBest = remember(leaderboardLaps) { LeaderboardProjector.theoreticalBestNanos(leaderboardLaps) }
-    val timedResults = remember(allRows) { allRows.map { TimedResultSummary(it.sessionId, it.startedWallTimeMillis, it.totalDurationNanos) } }
-    val monthly = remember(timedResults) { StatisticsAggregator.monthly(timedResults) }
-    val weekly = remember(timedResults) { StatisticsAggregator.weekly(timedResults) }
-    val tripGaps = remember(timedResults) { StatisticsAggregator.tripGapSeries(timedResults) }
     val recordBadges = remember(allRows, calendarNowMillis) {
         val bounds = comparisonPeriodBounds(calendarNowMillis)
         val monthBest = allRows.filter { it.startedWallTimeMillis in bounds.monthStartMillis until bounds.endExclusiveMillis }
@@ -146,11 +145,17 @@ fun TelemetryRecordsScreen(
         )
     }
 
+    key(selectedRouteId) {
+    listStates.SaveableStateProvider("route-lists-$selectedRouteId") {
+    val rankingListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val monthListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val weekListState = androidx.compose.foundation.lazy.rememberLazyListState()
     Surface(Modifier.fillMaxSize(), color = Background, contentColor = TelemetryWhite) {
         Column(Modifier.fillMaxSize()) {
             Text("个人纪录", fontSize = 27.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp))
             LazyColumn(
-                state = listState,
+                modifier = Modifier.testTag("records-list"),
+                state = when (tab) { RecordsTab.LEADERBOARD -> rankingListState; RecordsTab.MONTH -> monthListState; RecordsTab.WEEK -> weekListState },
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(13.dp),
             ) {
@@ -183,12 +188,19 @@ fun TelemetryRecordsScreen(
                         },
                         onOpenSession = onOpenSession,
                     )
-                    RecordsTab.MONTH -> aggregateContent(monthly, tripGaps, monthly = true)
-                    RecordsTab.WEEK -> aggregateContent(weekly, tripGaps, monthly = false)
+                    RecordsTab.MONTH, RecordsTab.WEEK -> item(key = "statistics-${tab.name}") {
+                        key(selectedRouteId, tab) {
+                            statisticsState.SaveableStateProvider("$selectedRouteId-${tab.name}") {
+                                PeriodStatisticsSection(allRows, monthly = tab == RecordsTab.MONTH, nowMillis = calendarNowMillis)
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+}
+}
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.leaderboardContent(
@@ -217,29 +229,6 @@ private fun androidx.compose.foundation.lazy.LazyListScope.leaderboardContent(
             badges = recordBadges[row.sessionId] ?: RecordBadges(),
             onClick = { onOpenSession(row.sessionId) },
         )
-    }
-}
-
-private fun androidx.compose.foundation.lazy.LazyListScope.aggregateContent(rows: List<PeriodAggregate>, tripGaps: List<TripGapPoint>, monthly: Boolean) {
-    val latest = rows.lastOrNull()
-    item {
-        Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(18.dp)) {
-            Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text(if (monthly) "最近月平均" else "最近周平均", color = if (monthly) Purple else Green, fontWeight = FontWeight.Bold)
-                Text(
-                    latest?.averageDurationNanos?.let(::formatRecordDuration) ?: "--",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 42.sp,
-                    fontWeight = FontWeight.Black,
-                )
-                Text(latest?.let { "${periodLabel(it, monthly)} · ${it.tripCount} 次有效行程" } ?: "暂无有效周期", color = Muted)
-            }
-        }
-    }
-    if (rows.isEmpty()) item { RecordsEmpty(if (monthly) "还没有月统计数据" else "还没有周统计数据") }
-    else {
-        item { TripGapTrendChart(tripGaps, Modifier.fillMaxWidth().height(250.dp)) }
-        itemsIndexed(rows.asReversed(), key = { _, row -> row.periodStart.toString() }) { _, row -> PeriodAggregateCard(row, monthly) }
     }
 }
 
@@ -332,79 +321,6 @@ private fun SectorValue(label: String, nanos: Long?, missing: Boolean, modifier:
         Text(label, color = Muted, fontSize = 10.sp)
         Text(nanos?.let(::formatRecordDuration) ?: "--", fontFamily = FontFamily.Monospace, fontSize = 12.sp, maxLines = 1)
         if (missing) Text("检查点缺失", color = Muted, fontSize = 9.sp)
-    }
-}
-
-@Composable
-private fun PeriodAggregateCard(row: PeriodAggregate, monthly: Boolean) {
-    Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(15.dp)) {
-        Row(Modifier.fillMaxWidth().padding(17.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(periodLabel(row, monthly), fontWeight = FontWeight.Bold)
-                Text("${row.tripCount} 次有效行程", color = Muted, fontSize = 12.sp)
-            }
-            Text(formatRecordDuration(row.averageDurationNanos), fontFamily = FontFamily.Monospace, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-private fun TripGapTrendChart(rows: List<TripGapPoint>, modifier: Modifier) {
-    val coordinates = remember(rows) { tripGapChartCoordinates(rows) }
-    val description = remember(rows) {
-        if (rows.isEmpty()) "日期与相对最快成绩差值趋势图，无有效行程"
-        else rows.joinToString(prefix = "日期与相对最快成绩差值趋势图：", separator = "；") { row ->
-            "${formatRecordDateOnly(row.startedWallTimeMillis)}，${formatRecordGap(row.gapNanos)}"
-        }
-    }
-    Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(16.dp), modifier = modifier) {
-        Column(Modifier.padding(16.dp)) {
-            Text("行程 GAP 趋势", fontWeight = FontWeight.Bold)
-            Text("纵轴 GAP（相对当前范围最快） · 横轴日期", color = Muted, fontSize = 11.sp)
-            Canvas(
-                Modifier.fillMaxSize().padding(top = 10.dp).testTag("trip-gap-chart")
-                    .semantics { contentDescription = description },
-            ) {
-                if (rows.isEmpty()) return@Canvas
-                val left = 54.dp.toPx()
-                val right = 8.dp.toPx()
-                val top = 8.dp.toPx()
-                val bottom = 28.dp.toPx()
-                val chartWidth = (size.width - left - right).coerceAtLeast(1f)
-                val chartHeight = (size.height - top - bottom).coerceAtLeast(1f)
-                val maxGap = rows.maxOf { it.gapNanos }.coerceAtLeast(1L)
-                val firstTime = rows.first().startedWallTimeMillis
-                val lastTime = rows.last().startedWallTimeMillis
-                val axis = Color(0xFF5D626A)
-                drawLine(axis, Offset(left, top), Offset(left, top + chartHeight), 1.dp.toPx())
-                drawLine(axis, Offset(left, top + chartHeight), Offset(left + chartWidth, top + chartHeight), 1.dp.toPx())
-                val labelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                    color = android.graphics.Color.rgb(153, 160, 168)
-                    textSize = 10.sp.toPx()
-                }
-                fun gapLabel(value: Long): String = if (value < 60_000_000_000L) {
-                    "+%.1fs".format(Locale.US, value / 1_000_000_000.0)
-                } else "+${formatRecordDuration(value)}"
-                listOf(0f, .5f, 1f).forEach { ratio ->
-                    val y = top + chartHeight * (1f - ratio)
-                    drawLine(axis.copy(alpha = .35f), Offset(left, y), Offset(left + chartWidth, y), .5.dp.toPx())
-                    drawContext.canvas.nativeCanvas.drawText(gapLabel((maxGap * ratio).toLong()), 0f, y + 4.dp.toPx(), labelPaint)
-                }
-                val offsets = coordinates.map { point ->
-                    Offset(
-                        x = left + chartWidth * point.xFraction,
-                        y = top + chartHeight * point.yFraction,
-                    )
-                }
-                offsets.zipWithNext().forEach { (a, b) -> drawLine(Purple, a, b, strokeWidth = 2.5.dp.toPx()) }
-                offsets.forEach { point -> drawCircle(Purple, 4.5.dp.toPx(), point); drawCircle(Color.White, 1.8.dp.toPx(), point) }
-                val dateFormat = SimpleDateFormat("MM-dd", Locale.CHINA)
-                labelPaint.textAlign = android.graphics.Paint.Align.LEFT
-                drawContext.canvas.nativeCanvas.drawText(dateFormat.format(Date(firstTime)), left, size.height - 3.dp.toPx(), labelPaint)
-                labelPaint.textAlign = android.graphics.Paint.Align.RIGHT
-                drawContext.canvas.nativeCanvas.drawText(dateFormat.format(Date(lastTime)), left + chartWidth, size.height - 3.dp.toPx(), labelPaint)
-            }
-        }
     }
 }
 
@@ -541,23 +457,3 @@ internal fun localDateToDatePickerMillis(date: LocalDate): Long =
 
 internal fun datePickerMillisToLocalDate(millis: Long): LocalDate =
     Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate()
-
-internal data class TripGapChartCoordinate(
-    val sessionId: String,
-    val xFraction: Float,
-    val yFraction: Float,
-)
-
-internal fun tripGapChartCoordinates(rows: List<TripGapPoint>): List<TripGapChartCoordinate> {
-    if (rows.isEmpty()) return emptyList()
-    val first = rows.first().startedWallTimeMillis
-    val span = (rows.last().startedWallTimeMillis - first).coerceAtLeast(1L)
-    val maxGap = rows.maxOf { it.gapNanos }.coerceAtLeast(1L)
-    return rows.map { row ->
-        TripGapChartCoordinate(
-            sessionId = row.sessionId,
-            xFraction = ((row.startedWallTimeMillis - first).toDouble() / span).toFloat().coerceIn(0f, 1f),
-            yFraction = (1.0 - row.gapNanos.toDouble() / maxGap).toFloat().coerceIn(0f, 1f),
-        )
-    }
-}

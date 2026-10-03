@@ -44,6 +44,7 @@ import app.deltat.commute.domain.ResultColor
 import app.deltat.commute.map.MapCameraPolicy
 import app.deltat.commute.map.MapCheckpoint
 import app.deltat.commute.map.MapScene
+import app.deltat.commute.map.MapPhase
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -76,9 +77,12 @@ fun TelemetryRoute(
     actualPassElapsedNanos: List<Long> = emptyList(),
     sectorColors: List<ResultColor> = emptyList(),
     cameraPolicy: MapCameraPolicy = MapCameraPolicy.FULL_ROUTE_LOCKED,
+    phase: MapPhase = MapPhase.OVERVIEW,
+    nextCheckpointIndex: Int = 1,
+    currentFixStale: Boolean = false,
 ) {
-    RouteMap(
-        scene = MapScene(
+    val scene = remember(routeSourcePoints, referencePoints, points, checkpoints, currentFix, actualPassElapsedNanos, sectorColors, cameraPolicy, phase, nextCheckpointIndex, currentFixStale) {
+        MapScene(
             routeSourceTrack = routeSourcePoints.ifEmpty { referencePoints },
             actualTrack = points,
             checkpoints = checkpoints.map(MapCheckpoint::from),
@@ -86,7 +90,11 @@ fun TelemetryRoute(
             actualPassElapsedNanos = actualPassElapsedNanos,
             sectorColors = sectorColors,
             cameraPolicy = cameraPolicy,
-        ),
+            phase = phase, nextCheckpointIndex = nextCheckpointIndex, currentFixStale = currentFixStale,
+        )
+    }
+    RouteMap(
+        scene = scene,
         modifier = modifier,
     )
 }

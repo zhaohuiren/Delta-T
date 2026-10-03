@@ -226,7 +226,7 @@ class DeltaTDatabaseTest {
         dao.insertRoute(RouteProfileEntity("r", "上班", "TO_WORK", activeCheckpointVersionId = "v", createdAtMillis = 1, updatedAtMillis = 1))
         suspend fun insert(id: String, total: Long, sectors: List<Long>, started: Long) {
             dao.insertSession(SessionEntity(id, "r", "v", "TIMED", "COMPLETED", null, started, totalDurationNanos = total, validity = "VALID", qualityGrade = "A", bootCount = 0, appVersion = "test", deviceModel = "test", androidVersion = "16", createdAtMillis = started))
-            dao.insertEvaluation(SessionEvaluationEntity("e-$id", id, "v", "VALID", totalDurationNanos = total, qualityGrade = "A", recordQualified = true, timingEngineVersion = 3, createdAtMillis = started, updatedAtMillis = started))
+            dao.insertEvaluation(SessionEvaluationEntity("e-$id", id, "v", "VALID", totalDurationNanos = total, qualityGrade = "A", recordQualified = true, timingEngineVersion = app.deltat.commute.domain.DefaultTimingEngine.TIMING_ENGINE_VERSION, createdAtMillis = started, updatedAtMillis = started))
             sectors.forEachIndexed { index, duration -> dao.insertEvaluationSector(EvaluationSectorEntity("e-$id", index, duration, recordQualified = true)) }
         }
         insert("best-s1", 100, listOf(10, 50, 40), now - 2_000)
@@ -320,7 +320,7 @@ class DeltaTDatabaseTest {
         )
         dao.insertSector(SectorResultEntity("old", 0, 20, null, null, null, "PURPLE", true))
         dao.insertSector(SectorResultEntity("new", 0, 30, null, null, null, "NEUTRAL", true))
-        dao.insertEvaluation(SessionEvaluationEntity("e-new", "new", "v2", "VALID", totalDurationNanos = 100, qualityGrade = "A", recordQualified = true, timingEngineVersion = 3, createdAtMillis = 2, updatedAtMillis = 2))
+        dao.insertEvaluation(SessionEvaluationEntity("e-new", "new", "v2", "VALID", totalDurationNanos = 100, qualityGrade = "A", recordQualified = true, timingEngineVersion = app.deltat.commute.domain.DefaultTimingEngine.TIMING_ENGINE_VERSION, createdAtMillis = 2, updatedAtMillis = 2))
         dao.insertEvaluationSector(EvaluationSectorEntity("e-new", 0, 30, recordQualified = true))
 
         assertEquals(30L, AppRepository(db).sectorBests("r").single().durationNanos)
@@ -424,14 +424,14 @@ class DeltaTDatabaseTest {
         val repository = AppRepository(db)
 
         assertEquals(8, repository.routeSourceTrack("r").size)
-        repository.prepareTimingEngineV3Upgrade()
+        repository.prepareTimingEngineUpgrade()
         assertEquals("v2", dao.route("r")?.activeCheckpointVersionId)
 
         repository.runPendingRecalculations()
 
         val upgradedVersion = requireNotNull(dao.route("r")?.activeCheckpointVersionId)
         assertTrue(upgradedVersion != "v2")
-        assertEquals(3, dao.evaluation("source", upgradedVersion)?.timingEngineVersion)
+        assertEquals(app.deltat.commute.domain.DefaultTimingEngine.TIMING_ENGINE_VERSION, dao.evaluation("source", upgradedVersion)?.timingEngineVersion)
         assertTrue(dao.evaluation("source", "v2") != null)
         assertEquals(8, dao.track("source").size)
         assertEquals("source", dao.route("r")?.referenceSessionId)
@@ -465,8 +465,8 @@ class DeltaTDatabaseTest {
         assertEquals("GREEN", dao.session("week-improvement")?.totalResultColor)
         assertEquals(10_000_000_000L, dao.session("week-improvement")?.weeklyDeltaNanos?.let { -it })
         assertEquals("GREEN", dao.sectors("week-improvement").single().resultColorAtCompletion)
-        assertEquals(3, dao.session("week-improvement")?.comparisonRulesVersion)
-        assertEquals(3, dao.sectors("week-improvement").single().comparisonRulesVersion)
+        assertEquals(4, dao.session("week-improvement")?.comparisonRulesVersion)
+        assertEquals(4, dao.sectors("week-improvement").single().comparisonRulesVersion)
 
         val snapshot = dao.session("week-improvement")
         AppRepository(db).rebuildComparisonHistory()

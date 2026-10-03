@@ -71,6 +71,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                 createdAtMillis = now,
                 active = false,
                 changeReason = "移动计时点并重算全部历史成绩",
+                timingEngineVersion = DefaultTimingEngine.TIMING_ENGINE_VERSION,
             ),
         )
         dao.insertCheckpoints(checkpoints)
@@ -101,7 +102,12 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
         if (dao.activeRecalculationJob(routeId) != null) return@withTransaction null
         val currentVersionId = route.activeCheckpointVersionId ?: return@withTransaction null
         val currentVersion = dao.checkpointVersion(currentVersionId) ?: return@withTransaction null
-        if (currentVersion.changeReason.startsWith(ENGINE_V3_REASON)) return@withTransaction null
+        if (currentVersion.timingEngineVersion >= DefaultTimingEngine.TIMING_ENGINE_VERSION) return@withTransaction null
+        val latest = dao.latestRecalculationJob(routeId)
+        if (latest?.status == "FAILED" && latest.createdAtMillis >= currentVersion.createdAtMillis &&
+            dao.checkpointVersion(latest.checkpointVersionId)?.timingEngineVersion == DefaultTimingEngine.TIMING_ENGINE_VERSION) {
+            return@withTransaction null // An explicit retry/edit owns recovery; startup must not create endless failed versions.
+        }
         val currentCheckpoints = dao.checkpoints(currentVersionId)
         if (currentCheckpoints.size != 4) return@withTransaction null
         val sourceSessionId = route.referenceSessionId ?: return@withTransaction null
@@ -121,7 +127,8 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                 createdFromSessionId = sourceSessionId,
                 createdAtMillis = now,
                 active = false,
-                changeReason = ENGINE_V3_REASON,
+                changeReason = "计时引擎 v${DefaultTimingEngine.TIMING_ENGINE_VERSION}：终点与历史成绩一致性修复",
+                timingEngineVersion = DefaultTimingEngine.TIMING_ENGINE_VERSION,
             ),
         )
         dao.insertCheckpoints(checkpoints)
@@ -158,13 +165,17 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
             val sessions = dao.recalculableSessions(job.routeProfileId)
             val checkpoints = dao.checkpoints(job.checkpointVersionId)
             require(checkpoints.size == 4) { "新计时点版本不完整" }
+            val axis = Geometry.axisAlignedRouteBearing(checkpoints.first().latitude, checkpoints.first().longitude, checkpoints.last().latitude, checkpoints.last().longitude)
+            val domainPoints = checkpoints.map { it.toDomain() }
+            val projections = domainPoints.map { Geometry.signedProgressMeters(it.latitude, it.longitude, domainPoints.first(), axis) }
+            require(projections.zipWithNext().all { (a, b) -> b - a >= 100.0 }) { "计时点与引擎方向不一致，请重新标记；旧版本已保留" }
             var successful = 0
             var failed = 0
             sessions.forEachIndexed { index, session ->
                 var evaluation = dao.evaluation(session.id, job.checkpointVersionId)
                 if (evaluation == null) {
                     val result = if (session.id == job.sourceSessionId) {
-                        replayRouteSource(session, checkpoints) ?: replay(session, checkpoints.map { it.toDomain() })
+                        replayRouteSource(session, checkpoints)
                     } else {
                         replay(session, checkpoints.map { it.toDomain() })
                     }
@@ -183,6 +194,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                 )
                 dao.updateRecalculationJob(job)
             }
+            require(dao.evaluation(job.sourceSessionId, job.checkpointVersionId)?.status == "VALID") { "源轨迹无法可靠重算，旧版本已保留" }
             rebuildComparisons(job.routeProfileId, job.checkpointVersionId)
             val finishedAt = System.currentTimeMillis()
             database.withTransaction {
@@ -233,8 +245,8 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
             if (state.status == EngineStatus.COMPLETED) return@forEach
             state = engine.processFix(state, point.toFix(), checkpoints).newState
         }
-        if (state.status != EngineStatus.COMPLETED || state.passes.size != 4) {
-            val missing = checkpoints.getOrNull(state.passes.size)?.label ?: "B"
+        if (state.status != EngineStatus.COMPLETED || state.passes.none { it.checkpoint.orderIndex == 0 } || state.passes.none { it.checkpoint.orderIndex == 3 }) {
+            val missing = checkpoints.firstOrNull { it.orderIndex == state.nextCheckpointIndex }?.label ?: "B"
             val usable = track.count { it.accuracyMeters <= 50.0 }
             val reason = if (usable < 4) "GPS 精度不足，无法确认 $missing" else "历史轨迹未经过新计时点 $missing"
             return ReplayResult.Failure(reason)
@@ -284,6 +296,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                         finishElapsedNanos = finish,
                         totalDurationNanos = finish - start,
                         qualityGrade = result.grade.name,
+                        missingCheckpointMask = (1..2).filter { index -> result.passes.none { it.checkpoint.orderIndex == index } }.fold(0) { mask, index -> mask or (1 shl index) },
                         recordQualified = result.grade != QualityGrade.C,
                         timingEngineVersion = DefaultTimingEngine.TIMING_ENGINE_VERSION,
                         createdAtMillis = existing?.createdAtMillis ?: createdAtMillis,
@@ -307,11 +320,11 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                         ),
                     )
                 }
-                result.passes.zipWithNext().forEachIndexed { sectorIndex, pair ->
+                result.passes.zipWithNext().filter { (a, b) -> b.checkpoint.orderIndex == a.checkpoint.orderIndex + 1 }.forEach { pair ->
                     dao.insertEvaluationSector(
                         EvaluationSectorEntity(
                             evaluationId = evaluationId,
-                            sectorIndex = sectorIndex,
+                            sectorIndex = pair.first.checkpoint.orderIndex,
                             durationNanos = pair.second.elapsedRealtimeNanos - pair.first.elapsedRealtimeNanos,
                             recordQualified = result.grade != QualityGrade.C,
                         ),
@@ -347,7 +360,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                     monthlyDeltaNanos = monthTotal?.let { total - it },
                     weeklyDeltaNanos = weekTotal?.let { total - it },
                     totalResultColor = RecordJudge.periodColor(total, monthTotal, weekTotal, grade, uncertainty).name,
-                    comparisonRulesVersion = 3,
+                    comparisonRulesVersion = 4,
                     updatedAtMillis = System.currentTimeMillis(),
                 ),
             )
@@ -363,7 +376,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                         monthlyDeltaNanos = monthBest?.let { sector.durationNanos - it },
                         weeklyDeltaNanos = weekBest?.let { sector.durationNanos - it },
                         resultColorAtCompletion = RecordJudge.periodColor(sector.durationNanos, monthBest, weekBest, grade, uncertainty).name,
-                        comparisonRulesVersion = 3,
+                        comparisonRulesVersion = 4,
                     ),
                 )
             }
@@ -379,13 +392,17 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
         require(selections.size == 4) { "必须设置 A、S1、S2、B 四个计时点" }
         val session = requireNotNull(dao.session(sourceSessionId)) { "历史轨迹不存在" }
         val track = dao.track(sourceSessionId)
+        require(session.status in setOf("COMPLETED", "RECORDED")) { "只能使用已完成的行程或录制轨迹" }
+        require(!session.isMockDetected && track.none { it.isMock }) { "历史轨迹包含模拟定位" }
         require(track.size >= 4) { "轨迹点不足，至少需要 4 个" }
         val positions = selections.map { selection ->
             val index = track.indexOfFirst { it.id == selection.segmentStartPointId }
             require(index in 0 until track.lastIndex) { "选点已不在当前轨迹中" }
-            val ratio = selection.segmentRatio.coerceIn(0.0, 1.0)
+            require(selection.segmentRatio.isFinite() && selection.segmentRatio in 0.0..1.0) { "选点比例无效" }
+            val ratio = selection.segmentRatio
             val a = track[index]
             val b = track[index + 1]
+            require(b.elapsedRealtimeNanos > a.elapsedRealtimeNanos) { "选点线段时间顺序无效" }
             SelectedTrackPosition(
                 sourcePointId = a.id,
                 pathPosition = index + ratio,
@@ -396,7 +413,7 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
             )
         }
         require(positions.zipWithNext().all { it.first.pathPosition < it.second.pathPosition }) { "计时点必须沿轨迹按 A、S1、S2、B 排列" }
-        val routeBearing = Geometry.bearingDegrees(
+        val routeBearing = Geometry.axisAlignedRouteBearing(
             positions.first().latitude, positions.first().longitude,
             positions.last().latitude, positions.last().longitude,
         )
@@ -418,10 +435,11 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
                 latitude = point.latitude,
                 longitude = point.longitude,
                 radiusMeters = radiusMeters.coerceIn(20.0, 80.0),
-                preferredBearing = routeBearing,
+                preferredBearing = Geometry.bearingDegrees(positions.first().latitude, positions.first().longitude, positions.last().latitude, positions.last().longitude),
                 bearingTolerance = 100.0,
                 gateHalfWidthMeters = maxOf(radiusMeters, 50.0),
                 sourceTrackPointId = point.sourcePointId,
+                sourceElapsedNanos = point.elapsedRealtimeNanos,
             )
         }
         return PreparedEdit(session, positions, checkpoints)
@@ -444,19 +462,52 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
     private suspend fun replayRouteSource(
         session: SessionEntity,
         checkpoints: List<CheckpointEntity>,
-    ): ReplayResult.Success? {
-        val pointsById = dao.track(session.id).associateBy { it.id }
+    ): ReplayResult {
+        val track = dao.track(session.id)
+        if (session.isMockDetected || track.any { it.isMock }) return ReplayResult.Failure("历史轨迹包含模拟定位", "LOW_QUALITY")
+        if (session.status !in setOf("COMPLETED", "RECORDED")) return ReplayResult.Failure("原行程未完成，不参与当前版本纪录")
         val passes = checkpoints.map { checkpoint ->
-            val point = checkpoint.sourceTrackPointId?.let(pointsById::get) ?: return null
+            val index = track.indexOfFirst { it.id == checkpoint.sourceTrackPointId }
+            if (index < 0) return ReplayResult.Failure("源轨迹选点无法恢复，保留旧成绩")
+            val point = track[index]
+            val next = track.getOrNull(index + 1)
+            val elapsed = checkpoint.sourceElapsedNanos ?: run {
+                // Recover only on the persisted segment, never on a nearby segment of a looping route.
+                val dx = (next?.longitude ?: point.longitude) - point.longitude
+                val dy = (next?.latitude ?: point.latitude) - point.latitude
+                val lengthSquared = dx * dx + dy * dy
+                if (lengthSquared == 0.0) {
+                    if (next != null || Geometry.distanceMeters(point.latitude, point.longitude, checkpoint.latitude, checkpoint.longitude) > 0.01) {
+                        return ReplayResult.Failure("源轨迹选点时间不明确，保留旧成绩")
+                    }
+                    point.elapsedRealtimeNanos
+                } else {
+                    val ratio = ((checkpoint.longitude - point.longitude) * dx + (checkpoint.latitude - point.latitude) * dy) / lengthSquared
+                    if (ratio !in -0.000001..1.000001 || next == null || next.elapsedRealtimeNanos <= point.elapsedRealtimeNanos) {
+                        return ReplayResult.Failure("源轨迹选点时间无法恢复，保留旧成绩")
+                    }
+                    val clamped = ratio.coerceIn(0.0, 1.0)
+                    if (Geometry.distanceMeters(point.latitude + dy * clamped, point.longitude + dx * clamped, checkpoint.latitude, checkpoint.longitude) > 0.1) {
+                        return ReplayResult.Failure("源轨迹选点不在原线段，保留旧成绩")
+                    }
+                    point.elapsedRealtimeNanos + ((next.elapsedRealtimeNanos - point.elapsedRealtimeNanos) * clamped).toLong()
+                }
+            }
+            if (elapsed < point.elapsedRealtimeNanos || elapsed > (next?.elapsedRealtimeNanos ?: point.elapsedRealtimeNanos)) {
+                return ReplayResult.Failure("源轨迹选点时间越界，保留旧成绩")
+            }
             CheckpointPass(
                 checkpoint = checkpoint.toDomain(),
-                elapsedRealtimeNanos = point.elapsedRealtimeNanos,
+                elapsedRealtimeNanos = elapsed,
                 latitude = checkpoint.latitude,
                 longitude = checkpoint.longitude,
                 triggerMode = TriggerMode.MANUAL_REVIEW,
                 closestDistanceMeters = 0.0,
                 uncertaintyMillis = 500L,
             )
+        }
+        if (passes.zipWithNext().any { (a, b) -> a.elapsedRealtimeNanos >= b.elapsedRealtimeNanos }) {
+            return ReplayResult.Failure("源轨迹选点时间顺序无效，保留旧成绩")
         }
         return ReplayResult.Success(passes, QualityGrade.B, 0)
     }
@@ -499,7 +550,4 @@ class HistoricalRecalculator(private val database: DeltaTDatabase) {
         data class Failure(val reason: String, val status: String = "INCOMPLETE") : ReplayResult
     }
 
-    private companion object {
-        const val ENGINE_V3_REASON = "计时引擎 v3：S1/S2 轴向无限参考线"
-    }
 }

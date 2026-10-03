@@ -53,13 +53,13 @@ class InsightsTest {
         assertNull(ReferenceProgressMatcher.match(reverse, reference, passes, currentSectorIndex = 0))
     }
 
-    @Test fun comparisonWeekIsClippedAtMonthBoundary() {
+    @Test fun comparisonWeekStartsOnMondayAcrossMonthBoundary() {
         val zone = ZoneId.of("Asia/Shanghai")
         val now = ZonedDateTime.of(2026, 7, 1, 8, 0, 0, 0, zone).toInstant().toEpochMilli()
         val bounds = comparisonPeriodBounds(now, zone)
         val monthStart = ZonedDateTime.of(2026, 7, 1, 0, 0, 0, 0, zone).toInstant().toEpochMilli()
         assertEquals(monthStart, bounds.monthStartMillis)
-        assertEquals(monthStart, bounds.weekStartMillis)
+        assertEquals(ZonedDateTime.of(2026, 6, 29, 0, 0, 0, 0, zone).toInstant().toEpochMilli(), bounds.weekStartMillis)
         assertEquals(now, bounds.endExclusiveMillis)
     }
 

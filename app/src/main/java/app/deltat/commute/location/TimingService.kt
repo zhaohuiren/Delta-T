@@ -145,7 +145,7 @@ class TimingService : Service() {
         if (sessionId != null || locationStarted) return
         val route = repository.route(routeId) ?: return stopWithError("路线不存在")
         val routeCheckpoints = repository.checkpointsForRoute(routeId)
-        if (routeCheckpoints.size != 4) return stopWithError("请先录制并标记四个计时点")
+        if (!app.deltat.commute.domain.validCheckpointSequence(routeCheckpoints)) return stopWithError("计时点顺序或间距不符合当前规则，请重新标记四个计时点")
         activateTimed(RouteCandidate(route.id, route.name, route.createdAtMillis, routeCheckpoints), null)
         startLocation()
     }
@@ -180,6 +180,8 @@ class TimingService : Service() {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            // A source may register callbacks and then throw before start() returns.
+            withContext(Dispatchers.Main) { try { locationSource.stop() } catch (_: Exception) { } }
             locationStarted = false
             stopWithError("定位启动失败：${error.message ?: error.javaClass.simpleName}")
         }
@@ -239,7 +241,10 @@ class TimingService : Service() {
         if (mode != "TIMED" || engineState.passes.isNotEmpty()) return
         val route = repository.route(routeId) ?: return
         val routeCheckpoints = repository.checkpointsForRoute(routeId)
-        if (routeCheckpoints.size != 4) return
+        if (!app.deltat.commute.domain.validCheckpointSequence(routeCheckpoints)) {
+            RuntimeBus.update { it.copy(error = "该路线计时点顺序或间距不符合当前规则，请重新标记") }
+            return
+        }
         sessionId?.let { repository.deleteSession(it) }
         sessionId = null
         val fix = RuntimeBus.state.value.lastFix
@@ -388,8 +393,9 @@ class TimingService : Service() {
             it.copy(
                 status = statusLabel(engineState),
                 engineStatus = engineState.status,
+                startRequiresExit = engineState.startRequiresExit == true && engineState.passes.isEmpty(),
                 startedAtElapsedNanos = firstPass,
-                elapsedNanos = firstPass?.let { start -> (fix.elapsedRealtimeNanos - start).coerceAtLeast(0) } ?: 0,
+                elapsedNanos = firstPass?.let { start -> ((engineState.passes.firstOrNull { pass -> pass.checkpoint.orderIndex == 3 }?.elapsedRealtimeNanos ?: fix.elapsedRealtimeNanos) - start).coerceAtLeast(0) } ?: 0,
                 currentSector = if (engineState.passes.isEmpty()) 0 else currentSector + 1,
                 sectors = completedSectors,
                 liveDeltaNanos = monthlyLive.cumulativeDeltaNanos,
@@ -496,11 +502,11 @@ class TimingService : Service() {
         ) ?: return LiveComparison(progress.lastCumulativeDeltaNanos, progress.lastSectorDeltaNanos, false)
         progress.expectedElapsedNanos = match.expectedElapsedSinceStartNanos
         val rawCumulative = (fix.elapsedRealtimeNanos - firstPass) - match.expectedElapsedSinceStartNanos
-        val actualSectorStart = engineState.passes.getOrNull(currentSector)?.elapsedRealtimeNanos ?: firstPass
+        val actualSectorStart = engineState.passes.firstOrNull { it.checkpoint.orderIndex == currentSector }?.elapsedRealtimeNanos
         val referenceSectorStart = referencePasses[currentSector] - referencePasses.first()
-        val rawSector = (fix.elapsedRealtimeNanos - actualSectorStart) - (match.expectedElapsedSinceStartNanos - referenceSectorStart)
+        val rawSector = actualSectorStart?.let { (fix.elapsedRealtimeNanos - it) - (match.expectedElapsedSinceStartNanos - referenceSectorStart) }
         progress.lastCumulativeDeltaNanos = medianSample(progress.cumulativeSamples, rawCumulative)
-        progress.lastSectorDeltaNanos = medianSample(progress.sectorSamples, rawSector)
+        progress.lastSectorDeltaNanos = rawSector?.let { medianSample(progress.sectorSamples, it) }
         return LiveComparison(progress.lastCumulativeDeltaNanos, progress.lastSectorDeltaNanos, true)
     }
 
@@ -528,7 +534,7 @@ class TimingService : Service() {
         sessionId = null
         mode = ""
         clearPreparedReferences()
-        if (baseline && id != null) RuntimeBus.update { it.copy(status = "路线轨迹已录制") } else RuntimeBus.reset()
+        if (baseline && id != null) RuntimeBus.update { it.copy(status = "路线轨迹已录制", mode = "BASELINE_RECORDED") } else RuntimeBus.reset()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

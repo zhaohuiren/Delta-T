@@ -85,6 +85,42 @@ class TimingServiceIntegrationTest {
         assertEquals(0, RuntimeBus.state.value.pendingFixCount)
     }
 
+    @Test fun recordedBaselineLeavesActiveModeAndRetainsEditableSession() {
+        command(TimingService.ACTION_START_BASELINE, "service-r1")
+        await { RuntimeBus.state.value.sessionId != null && source.starts.get() > 0 }
+        val id = RuntimeBus.state.value.sessionId!!
+        for (i in 0..8) source.emit(fix(i))
+        await { db { dao.track(id).size } == 9 }
+        command(TimingService.ACTION_STOP_BASELINE)
+        await { source.stops.get() > 0 && RuntimeBus.state.value.mode == "BASELINE_RECORDED" }
+        assertEquals(id, RuntimeBus.state.value.sessionId)
+        assertEquals("RECORDED", db { repository.session(id)!!.status })
+        assertEquals("路线轨迹已录制", RuntimeBus.state.value.status)
+        assertNull(db { repository.activeSession() })
+    }
+
+    @Test fun completedDisplayUsesInterpolatedFinishInsteadOfLastFixTime() {
+        val id = start()
+        for (i in 0..6) { source.emit(fix(i)); await { db { dao.track(id).size } >= i + 1 } }
+        source.emit(fix(8).copy(elapsedRealtimeNanos = base + 35_000_000_000L))
+        await { db { repository.session(id)?.status } == "COMPLETED" }
+        val saved = db { repository.session(id)!! }
+        assertEquals(saved.totalDurationNanos, RuntimeBus.state.value.elapsedNanos)
+        assertEquals(saved.finishElapsedNanos!! - saved.startElapsedNanos!!, RuntimeBus.state.value.elapsedNanos)
+    }
+
+    @Test fun startingInsideAExposesExitRequirementWithoutStartingTimer() {
+        val id = start()
+        source.emit(fix(1))
+        await { RuntimeBus.state.value.startRequiresExit }
+        assertNull(RuntimeBus.state.value.startedAtElapsedNanos)
+        assertTrue(db { dao.passes(id).isEmpty() })
+        source.emit(fix(0).copy(elapsedRealtimeNanos = base + 20_000_000_000L))
+        await { !RuntimeBus.state.value.startRequiresExit }
+        assertNull(RuntimeBus.state.value.startedAtElapsedNanos)
+        assertTrue(db { dao.passes(id).isEmpty() })
+    }
+
     @Test fun mockTrackIsPersistedForDiagnosticsButCannotStartTimingOrEnterLeaderboard() {
         val id = start()
         for (i in 0..8) source.emit(fix(i).copy(isMock = true))
@@ -137,7 +173,7 @@ class TimingServiceIntegrationTest {
         drop("test_fail_pass")
         RuntimeBus.update { it.copy(error = null) }
         source.emit(fix(2))
-        await { db { dao.passes(id).isNotEmpty() } }
+        await { db { dao.passes(id).isNotEmpty() } && RuntimeBus.state.value.startedAtElapsedNanos != null }
         assertNotNull(RuntimeBus.state.value.startedAtElapsedNanos)
         for (i in 3..8) source.emit(fix(i))
         await { db { repository.session(id)?.status } == "COMPLETED" }
@@ -177,8 +213,8 @@ class TimingServiceIntegrationTest {
     private fun command(action: String, route: String? = null) {
         activity.onActivity { it.startService(Intent(it, TimingService::class.java).setAction(action).putExtra(TimingService.EXTRA_ROUTE_ID, route)) }
     }
-    private fun fix(x: Int) = LocationFix(31.0, 121.0 + x * .001, base + x * 10_000_000_000L,
-        System.currentTimeMillis() + x * 10_000L, 5.0, 12.0, 90.0, 3.0, "fixture", false)
+    private fun fix(x: Int) = LocationFix(31.0, 121.0 + x * .001, base + x * 5_000_000_000L,
+        System.currentTimeMillis() + x * 5_000L, 5.0, 12.0, 90.0, 3.0, "fixture", false)
     private fun trigger(name: String, table: String, event: String, condition: String) = db {
         app.database.openHelper.writableDatabase.execSQL("CREATE TRIGGER $name BEFORE $event ON $table WHEN $condition BEGIN SELECT RAISE(ABORT, 'injected-$name'); END")
     }

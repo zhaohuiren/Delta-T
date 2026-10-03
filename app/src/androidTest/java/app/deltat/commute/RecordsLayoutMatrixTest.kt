@@ -32,7 +32,7 @@ class RecordsLayoutMatrixTest {
             startedWallTimeMillis = start + (i / 20) * 60_000L,
             totalDurationNanos = if (i == 199) 86_399_990_000_000L else 1_600_000_000_000L + i * 100_000_000L,
             qualityGrade = "A", sector1Nanos = 500_000_000_000, sector2Nanos = 500_000_000_000, sector3Nanos = 600_000_000_000,
-            timingEngineVersion = 3, missingCheckpointMask = 0,
+            timingEngineVersion = app.deltat.commute.domain.DefaultTimingEngine.TIMING_ENGINE_VERSION, missingCheckpointMask = 0,
         ) }
         val config = mutableStateOf(360 to 1f)
         compose.setContent {
@@ -41,18 +41,30 @@ class RecordsLayoutMatrixTest {
                 Box(Modifier.width(config.value.first.dp)) { DeltaTTheme { TelemetryRecordsScreen(routes, rows, {}) } }
             }
         }
-        for (width in listOf(360, 393, 411)) for (font in listOf(1f, 1.3f)) {
+        for (width in listOf(320, 360, 393, 411)) for (font in listOf(1f, 1.3f)) {
             compose.runOnIdle { config.value = width to font }
             compose.onNodeWithTag("route-option-matrix-10").performScrollTo().performClick().assertIsSelected()
             compose.onNodeWithTag("route-option-matrix-1").performScrollTo().performClick().assertIsSelected()
             compose.onNodeWithText("月统计").performScrollTo().performClick()
             compose.onNodeWithTag("trip-gap-chart").performScrollTo().assertIsDisplayed()
             val chart = compose.onNodeWithTag("trip-gap-chart").fetchSemanticsNode()
-            val description = chart.config[SemanticsProperties.ContentDescription].joinToString()
-            assertEquals("不能聚合/隐藏同日有效行程", 200, Regex("GAP").findAll(description).count())
+            compose.onNodeWithTag("stats-window").assertTextEquals("第 196–200 次／共 200 次")
+            compose.onAllNodes(hasTestTag("trip-bar-matrix-trip-199")).assertCountEquals(1)
+            compose.onNodeWithTag("stats-earlier").performScrollTo().performClick()
+            compose.onNodeWithTag("stats-window").assertTextEquals("第 191–195 次／共 200 次")
+            compose.onNodeWithTag("stats-later").performClick()
+            compose.saveScreenshot("records-before-axis-check-${width}-${font}.png")
+            for (tick in 0..3) {
+                compose.onNodeWithTag("gap-axis-$tick").onChild().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { action ->
+                    val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                    action(layouts)
+                    assertTrue("轴刻度不能折行或截断 width=$width font=$font tick=$tick layouts=${layouts.map { "${it.layoutInput.text.text}: lines=${it.lineCount}, size=${it.size}, overflowW=${it.didOverflowWidth}, overflowH=${it.didOverflowHeight}" }}", layouts.isNotEmpty() && layouts.all { it.lineCount == 1 && !it.hasVisualOverflow })
+                }
+            }
             assertTrue(chart.boundsInRoot.width > 100)
             assertTrue(chart.boundsInRoot.height > 100)
             compose.saveScreenshot("records-matrix-${width}-${font}.png")
+            compose.onNodeWithTag("records-list").performScrollToIndex(0)
             compose.onNodeWithText("排行榜").performScrollTo().performClick()
         }
     }

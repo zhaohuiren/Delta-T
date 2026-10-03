@@ -22,8 +22,8 @@ android {
         applicationId = "app.deltat.commute"
         minSdk = 29
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.6.0-test"
+        versionCode = 12
+        versionName = "0.6.2-test"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("boolean", "AMAP_AVAILABLE", amapApiKey.get().isNotBlank().toString())

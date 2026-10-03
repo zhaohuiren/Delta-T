@@ -62,6 +62,8 @@ data class RuntimeSnapshot(
     val pendingFixCount: Int = 0,
     val droppedFixCount: Long = 0,
     val error: String? = null,
+    // Presentation of the engine's existing gate; does not change start detection.
+    val startRequiresExit: Boolean = false,
 )
 
 object RuntimeBus {

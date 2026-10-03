@@ -27,8 +27,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
@@ -51,10 +57,14 @@ import app.deltat.commute.domain.ResultColor
 import app.deltat.commute.map.MapCameraPolicy
 import app.deltat.commute.map.MapCheckpoint
 import app.deltat.commute.map.MapScene
+import app.deltat.commute.map.MapPhase
+import app.deltat.commute.map.displayCheckpoints
+import app.deltat.commute.map.MapPixel
+import app.deltat.commute.map.layoutMapLabels
 import com.amap.api.maps.AMap
 import com.amap.api.maps.CameraUpdateFactory
 import com.amap.api.maps.CoordinateConverter
-import com.amap.api.maps.MapView
+import com.amap.api.maps.TextureMapView
 import com.amap.api.maps.MapsInitializer
 import com.amap.api.maps.model.BitmapDescriptor
 import com.amap.api.maps.model.BitmapDescriptorFactory
@@ -102,9 +112,19 @@ fun RouteMap(scene: MapScene, modifier: Modifier = Modifier) {
     var failed by remember(scene.cameraPolicy) { mutableStateOf(false) }
     LaunchedEffect(online) { if (online) failed = false }
     if (config.sdkAvailable && config.privacyAgreed && online && !failed) {
-        AmapScene(scene, modifier) { failed = true }
+        Box(modifier) {
+            AmapScene(scene, Modifier.fillMaxSize()) { failed = true }
+            if (scene.currentFixStale && scene.currentFix != null) Text("上次定位",
+                Modifier.align(Alignment.TopStart).padding(8.dp).background(Color(0xE6111419), RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 4.dp),
+                color = Color(0xFFB8C1CA), fontSize = 11.sp)
+        }
     } else {
-        AbstractMapScene(scene, modifier)
+        Box(modifier) {
+            AbstractMapScene(scene, Modifier.fillMaxSize())
+            Text(if (scene.currentFixStale && scene.currentFix != null) "简洁地图 · 上次定位" else "简洁地图",
+                Modifier.align(Alignment.TopStart).padding(8.dp).background(Color(0xE6111419), RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 4.dp),
+                color = Color(0xFFB8C1CA), fontSize = 11.sp)
+        }
     }
 }
 
@@ -155,7 +175,7 @@ private class AmapSceneController(
     private val appContext: Context,
     private val onFailure: () -> Unit,
 ) {
-    private var mapView: MapView? = null
+    private var mapView: TextureMapView? = null
     private var map: AMap? = null
     private var backgroundShade: Polygon? = null
     private var latestScene: MapScene? = null
@@ -174,11 +194,17 @@ private class AmapSceneController(
     private var positionMarker: Marker? = null
     private val checkpointIcons = mutableMapOf<String, BitmapDescriptor>()
     private var positionIcon: BitmapDescriptor? = null
+    private var anchorIcon: BitmapDescriptor? = null
+    private val anchorMarkers = mutableMapOf<Int, Marker>()
+    private val labelLeaders = mutableMapOf<Int, Polyline>()
+    private var labelSlots: Map<Int, Int> = emptyMap()
+    private var lastRouteInput: List<LocationFix>? = null
+    private var displayedRoute: List<LatLng> = emptyList()
 
     fun createView(context: Context): View {
         MapsInitializer.updatePrivacyShow(appContext, true, true)
         MapsInitializer.updatePrivacyAgree(appContext, true)
-        return MapView(context).also { view ->
+        return TextureMapView(context).also { view ->
             mapView = view
             view.onCreate(Bundle())
             map = view.map.apply {
@@ -206,7 +232,10 @@ private class AmapSceneController(
             view.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
                 if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
                     lastCameraSignature = null
-                    latestScene?.let(::update)
+                    latestScene?.let { scene ->
+                        updateCamera(scene, displayedRoute, scene.displayCheckpoints().map { display(it.latitude, it.longitude) })
+                        scheduleMarkerLayout()
+                    }
                 }
             }
         }
@@ -214,14 +243,22 @@ private class AmapSceneController(
 
     fun update(scene: MapScene) {
         val amap = map ?: return
+        val previous = latestScene
+        if (previous == scene) return
         latestScene = scene
         configureGestures(amap, scene.cameraPolicy == MapCameraPolicy.INTERACTIVE_DETAIL)
-        val route = scene.routeSourceTrack.map(::display)
-        updateRoute(amap, route)
-        updateActualTrack(amap, scene)
-        val checkpoints = scene.checkpoints.sortedBy { it.orderIndex }
-        updateProgressLines(amap, checkpoints)
-        updateCheckpoints(amap, checkpoints)
+        if (lastRouteInput != scene.routeSourceTrack) {
+            lastRouteInput = scene.routeSourceTrack
+            displayedRoute = scene.routeSourceTrack.map(::display)
+            updateRoute(amap, displayedRoute)
+        }
+        val route = displayedRoute
+        if (previous?.actualTrack != scene.actualTrack || previous.actualPassElapsedNanos != scene.actualPassElapsedNanos || previous.sectorColors != scene.sectorColors) updateActualTrack(amap, scene)
+        val checkpoints = scene.displayCheckpoints().sortedBy { it.orderIndex }
+        if (previous?.checkpoints != scene.checkpoints || previous.phase != scene.phase || previous.nextCheckpointIndex != scene.nextCheckpointIndex) {
+            updateProgressLines(amap, checkpoints)
+            updateCheckpoints(amap, checkpoints)
+        }
         scene.currentFix?.let { fix ->
             val reliable = fix.bearingDegrees?.takeIf { (fix.bearingAccuracyDegrees ?: 0.0) <= 45.0 && (fix.speedMetersPerSecond ?: 0.0) >= 2.0 }
             if (reliable != null) lastReliableBearing = reliable
@@ -232,6 +269,7 @@ private class AmapSceneController(
             marker.position = display(fix)
             marker.rotateAngle = (-lastReliableBearing).toFloat()
             marker.isVisible = true
+            marker.alpha = if (scene.currentFixStale) .45f else 1f
         } ?: run {
             positionMarker?.isVisible = false
         }
@@ -254,7 +292,7 @@ private class AmapSceneController(
             PolylineOptions().addAll(points).width(7f * density).color(0xE6080A0D.toInt()).zIndex(1f),
         )).also { it.points = points; it.isVisible = true }
         routeLine = (routeLine ?: amap.addPolyline(
-            PolylineOptions().addAll(points).width(4f * density).color(0xFFE5E9ED.toInt()).zIndex(2f),
+            PolylineOptions().addAll(points).width(2.5f * density).color(0xFF78848E.toInt()).zIndex(2f),
         )).also { it.points = points; it.isVisible = true }
     }
 
@@ -263,7 +301,7 @@ private class AmapSceneController(
         segments.forEachIndexed { index, segment ->
             val points = segment.points.map(::display)
             val line = actualLines.getOrNull(index) ?: amap.addPolyline(
-                PolylineOptions().addAll(points).width(5f * appContext.resources.displayMetrics.density).color(segment.color).zIndex(4f),
+                PolylineOptions().addAll(points).width(4f * appContext.resources.displayMetrics.density).color(segment.color).zIndex(4f),
             ).also(actualLines::add)
             line.points = points
             line.color = segment.color
@@ -292,7 +330,7 @@ private class AmapSceneController(
                 ProgressLineAxis.NORTH_SOUTH -> listOf(LatLng(point.latitude - latSpan * 1.5, point.longitude), LatLng(point.latitude + latSpan * 1.5, point.longitude))
             }
             val line = progressLines[checkpoint.orderIndex] ?: amap.addPolyline(
-                PolylineOptions().addAll(ends).width(5f).color(0xB36E757C.toInt()).setDottedLine(true).zIndex(3f),
+                PolylineOptions().addAll(ends).width(1.25f * appContext.resources.displayMetrics.density).color(0x706E757C).setDottedLine(true).zIndex(3f),
             ).also { progressLines[checkpoint.orderIndex] = it }
             line.points = ends
             line.isVisible = true
@@ -303,6 +341,8 @@ private class AmapSceneController(
         val present = checkpoints.mapTo(mutableSetOf()) { it.orderIndex }
         checkpointMarkers.filterKeys { it !in present }.values.forEach { it.isVisible = false }
         checkpointCircles.filterKeys { it !in present }.values.forEach { it.isVisible = false }
+        anchorMarkers.filterKeys { it !in present }.values.forEach { it.isVisible = false }
+        labelLeaders.filterKeys { it !in present }.values.forEach { it.isVisible = false }
         checkpoints.forEach { checkpoint ->
             val position = display(checkpoint.latitude, checkpoint.longitude)
             val marker = checkpointMarkers[checkpoint.orderIndex] ?: amap.addMarker(
@@ -310,6 +350,12 @@ private class AmapSceneController(
             ).also { checkpointMarkers[checkpoint.orderIndex] = it }
             marker.position = position
             marker.isVisible = true
+            marker.alpha = if (latestScene?.phase == MapPhase.PREPARING && checkpoint.orderIndex != 0) .5f else 1f
+            val anchor = anchorMarkers[checkpoint.orderIndex] ?: amap.addMarker(
+                MarkerOptions().position(position).icon(anchorDotIcon()).anchor(.5f, .5f).zIndex(7.5f),
+            ).also { anchorMarkers[checkpoint.orderIndex] = it }
+            anchor.position = position
+            anchor.isVisible = true
             if (checkpoint.orderIndex == 0 || checkpoint.orderIndex == 3) {
                 val circle = checkpointCircles[checkpoint.orderIndex] ?: amap.addCircle(
                     CircleOptions().center(position).radius(checkpoint.radiusMeters).strokeWidth(2f)
@@ -317,7 +363,7 @@ private class AmapSceneController(
                 ).also { checkpointCircles[checkpoint.orderIndex] = it }
                 circle.center = position
                 circle.radius = checkpoint.radiusMeters
-                circle.isVisible = true
+                circle.isVisible = latestScene?.phase != MapPhase.PREPARING || checkpoint.orderIndex == 0
             }
         }
     }
@@ -327,51 +373,40 @@ private class AmapSceneController(
         val view = mapView ?: return
         if (view.width <= 0 || view.height <= 0) return
         val density = appContext.resources.displayMetrics.density
-        val occupied = mutableListOf<android.graphics.Point>()
-        positionMarker?.takeIf { it.isVisible }?.let { occupied += projection.toScreenLocation(it.position) }
-        checkpointMarkers.toSortedMap().forEach { (order, marker) ->
-            if (!marker.isVisible) return@forEach
-            val point = projection.toScreenLocation(marker.position)
-            val margin = 20f * density
-            fun safeCenter(x: Float, y: Float) = android.graphics.Point(
-                x.coerceIn(margin, max(margin, view.width - margin)).toInt(),
-                y.coerceIn(margin, max(margin, view.height - margin)).toInt(),
-            )
-            fun overlaps(candidate: android.graphics.Point): Boolean = occupied.any { other ->
-                val dx = (other.x - candidate.x).toFloat()
-                val dy = (other.y - candidate.y).toFloat()
-                dx * dx + dy * dy < 40f * density * 40f * density
-            }
-            val original = safeCenter(point.x.toFloat(), point.y.toFloat())
-            val offset = 42f * density
-            val candidates = listOf(
-                original,
-                safeCenter(point.x.toFloat(), point.y - offset),
-                safeCenter(point.x.toFloat(), point.y + offset),
-                safeCenter(point.x - offset, point.y.toFloat()),
-                safeCenter(point.x + offset, point.y.toFloat()),
-            )
-            val center = candidates.firstOrNull { !overlaps(it) } ?: candidates[1 + order % 4]
-            marker.setAnchor(
-                .5f - (center.x - point.x) / (CHECKPOINT_ICON_DP * density),
-                .5f - (center.y - point.y) / (CHECKPOINT_ICON_DP * density),
-            )
-            occupied += center
+        val anchors = checkpointMarkers.filterValues { it.isVisible }.mapValues { (_, marker) ->
+            projection.toScreenLocation(marker.position).let { MapPixel(it.x.toFloat(), it.y.toFloat()) }
+        }
+        val position = positionMarker?.takeIf { it.isVisible }?.let { projection.toScreenLocation(it.position) }?.let { MapPixel(it.x.toFloat(), it.y.toFloat()) }
+        val placements = layoutMapLabels(anchors, position, view.width.toFloat(), view.height.toFloat(), density, labelSlots,
+            if (latestScene?.phase == MapPhase.TIMING) latestScene?.nextCheckpointIndex ?: 0 else 0)
+        labelSlots = placements.associate { it.order to it.slot }
+        placements.forEach { placement ->
+            val marker = checkpointMarkers.getValue(placement.order)
+            marker.setAnchor(.5f - (placement.label.x - placement.anchor.x) / (CHECKPOINT_ICON_DP * density),
+                .5f - (placement.label.y - placement.anchor.y) / (CHECKPOINT_ICON_DP * density))
+            val labelPosition = projection.fromScreenLocation(android.graphics.Point(placement.label.x.toInt(), placement.label.y.toInt()))
+            val leader = labelLeaders[placement.order] ?: map!!.addPolyline(
+                PolylineOptions().add(marker.position, labelPosition).width(density).color(0xFFAEB8C0.toInt()).zIndex(7f)
+            ).also { labelLeaders[placement.order] = it }
+            leader.points = listOf(marker.position, labelPosition)
+            leader.isVisible = placement.displaced
         }
     }
 
     private fun updateCamera(scene: MapScene, route: List<LatLng>, checkpoints: List<LatLng>) {
         val view = mapView ?: return
         val amap = map ?: return
-        val all = (route + checkpoints).ifEmpty { scene.actualTrack.map(::display) }
-        if (all.isEmpty()) return
+        if (view.width <= 0 || view.height <= 0) return
         when (scene.cameraPolicy) {
             MapCameraPolicy.FULL_ROUTE_LOCKED, MapCameraPolicy.INTERACTIVE_DETAIL -> {
-                val signature = 31 * (31 * route.hashCode() + checkpoints.hashCode()) +
-                    31 * view.width + view.height
-                if (signature == lastCameraSignature) return
+                val signature = listOf(route.hashCode(), checkpoints.hashCode(), view.width, view.height, scene.phase, scene.cameraPolicy).hashCode()
+                val position = scene.currentFix?.let(::display)?.let(amap.projection::toScreenLocation)
+                val margin = 30 * appContext.resources.displayMetrics.density
+                val outside = position != null && (position.x < margin || position.y < margin || position.x > view.width - margin || position.y > view.height - margin)
+                if (signature == lastCameraSignature && (scene.cameraPolicy == MapCameraPolicy.INTERACTIVE_DETAIL || !outside)) return
                 lastCameraSignature = signature
-                view.post { fit(all) }
+                val all = route + checkpoints + scene.actualTrack.map(::display) + listOfNotNull(scene.currentFix?.let(::display))
+                if (all.isNotEmpty()) view.post { fit(all) }
             }
             MapCameraPolicy.STAGED_RECORDING -> {
                 val newest = scene.actualTrack.lastOrNull()?.let(::display) ?: return
@@ -398,7 +433,7 @@ private class AmapSceneController(
         val view = mapView ?: return
         val amap = map ?: return
         val density = view.resources.displayMetrics.density
-        val padding = (26 * density).toInt()
+        val padding = (42 * density).toInt()
         cameraSettled = false
         amap.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, padding))
     }
@@ -457,6 +492,9 @@ private class AmapSceneController(
             checkpointMarkers.values.forEach(Marker::destroy)
             checkpointCircles.values.forEach(Circle::remove)
             positionMarker?.destroy()
+            anchorMarkers.values.forEach(Marker::destroy)
+            labelLeaders.values.forEach(Polyline::remove)
+            anchorIcon?.recycle()
             checkpointIcons.values.forEach(BitmapDescriptor::recycle)
             positionIcon?.recycle()
             mapView?.onDestroy()
@@ -478,8 +516,23 @@ private class AmapSceneController(
         checkpointIcons.clear()
         positionIcon = null
         coordinateCache.clear()
+        anchorMarkers.clear()
+        labelLeaders.clear()
+        labelSlots = emptyMap()
+        anchorIcon = null
+        lastRouteInput = null
+        displayedRoute = emptyList()
         lastCameraSignature = null
         recordingBounds = null
+    }
+
+    private fun anchorDotIcon(): BitmapDescriptor {
+        anchorIcon?.let { return it }
+        val size = (4f * appContext.resources.displayMetrics.density).toInt().coerceAtLeast(4)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        AndroidCanvas(bitmap).drawCircle(size / 2f, size / 2f, size / 2f,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(222, 229, 235) })
+        return BitmapDescriptorFactory.fromBitmap(bitmap).also { anchorIcon = it }
     }
 
     private fun checkpointIcon(label: String): BitmapDescriptor {
@@ -508,7 +561,7 @@ private class AmapSceneController(
     private fun gpsArrowIcon(): BitmapDescriptor {
         positionIcon?.let { return it }
         val density = appContext.resources.displayMetrics.density
-        val size = (36 * density).toInt().coerceAtLeast(36)
+        val size = (32 * density).toInt().coerceAtLeast(32)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = AndroidCanvas(bitmap)
         val path = AndroidPath().apply {
@@ -532,86 +585,105 @@ private class AmapSceneController(
 
 @Composable
 private fun AbstractMapScene(scene: MapScene, modifier: Modifier) {
-    val density = LocalDensity.current
     var lastReliableBearing by remember { mutableStateOf(0.0) }
     val currentFix = scene.currentFix
     val reliableBearing = currentFix?.bearingDegrees?.takeIf {
         (currentFix.bearingAccuracyDegrees ?: 0.0) <= 45.0 && (currentFix.speedMetersPerSecond ?: 0.0) >= 2.0
     }
     LaunchedEffect(reliableBearing) { if (reliableBearing != null) lastReliableBearing = reliableBearing }
-    val allPoints = scene.routeSourceTrack + scene.actualTrack + scene.currentFix.orEmpty()
-    Box(modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xFF090C0F)).testTag("abstract-route-map"), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.fillMaxSize()) {
-            val checkpointFixes = scene.checkpoints.map { LocationFix(it.latitude, it.longitude, 0, 0, 0.0) }
-            val projection = MeterProjection(allPoints + checkpointFixes, size.width, size.height)
-            fun path(points: List<LocationFix>, color: Color, width: Float) {
-                if (points.size < 2) return
-                val projected = points.map(projection::project)
-                val routePath = Path().apply {
-                    moveTo(projected.first().x, projected.first().y)
-                    projected.drop(1).forEach { lineTo(it.x, it.y) }
+    val viewport = remember(scene.routeSourceTrack, scene.checkpoints, scene.phase, scene.cameraPolicy) { CanvasViewport() }
+    val slots = remember(scene.checkpoints) { mutableMapOf<Int, Int>() }
+    Box(modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xFF090C0F)).graphicsLayer().testTag("abstract-route-map")) {
+        Spacer(Modifier.fillMaxSize().drawWithCache {
+            val checkpoints = scene.displayCheckpoints().sortedBy { it.orderIndex }
+            val checkpointFixes = checkpoints.map { LocationFix(it.latitude, it.longitude, 0, 0, 0.0) }
+            val allPoints = scene.routeSourceTrack + scene.actualTrack + scene.currentFix.orEmpty() + checkpointFixes
+            val projection = viewport.projection(allPoints, scene.currentFix, size.width, size.height, density)
+            fun path(points: List<LocationFix>): Path = Path().apply {
+                points.forEachIndexed { index, fix ->
+                    val point = projection.project(fix)
+                    if (index == 0) moveTo(point.x, point.y) else lineTo(point.x, point.y)
                 }
-                drawPath(routePath, color, style = Stroke(width.dp.toPx(), cap = StrokeCap.Round))
             }
-            path(scene.routeSourceTrack, Color(0xFF05070A), 6f)
-            path(scene.routeSourceTrack, Color(0xFFE5E9ED), 3f)
-            coloredTrackSegments(scene.actualTrack, scene.actualPassElapsedNanos, scene.sectorColors).forEach { segment ->
-                path(segment.points, Color(segment.color), 4f)
-            }
-            val checkpoints = scene.checkpoints.sortedBy { it.orderIndex }
-            if (checkpoints.size == 4) {
+            val sourcePath = path(scene.routeSourceTrack)
+            val actualPaths = coloredTrackSegments(scene.actualTrack, scene.actualPassElapsedNanos, scene.sectorColors).map { path(it.points) to Color(it.color) }
+            val position = scene.currentFix?.let(projection::project)
+            val anchors = checkpoints.associate { cp -> cp.orderIndex to projection.project(LocationFix(cp.latitude, cp.longitude, 0, 0, 0.0)).let { MapPixel(it.x, it.y) } }
+            val placements = layoutMapLabels(anchors, position?.let { MapPixel(it.x, it.y) }, size.width, size.height, density, slots,
+                if (scene.phase == MapPhase.TIMING) scene.nextCheckpointIndex else 0)
+            slots.clear(); slots.putAll(placements.associate { it.order to it.slot })
+            val paints = checkpoints.associate { cp -> cp.orderIndex to android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = AndroidColor.WHITE; textAlign = Paint.Align.CENTER
+                textSize = (if (cp.label.length > 1) 11 else 14) * density; isFakeBoldText = true
+            } }
+            val radii = checkpoints.filter { (it.orderIndex == 0 || it.orderIndex == 3) && (scene.phase != MapPhase.PREPARING || it.orderIndex == 0) }
+                .map { cp -> anchors.getValue(cp.orderIndex) to projection.radiusPixels(cp.radiusMeters) }
+            val progress = if (checkpoints.size == 4) {
                 val axis = Geometry.progressLineAxis(checkpoints.first().latitude, checkpoints.first().longitude, checkpoints.last().latitude, checkpoints.last().longitude)
-                checkpoints.filter { it.showProgressLine }.forEach { checkpoint ->
-                    val point = projection.project(LocationFix(checkpoint.latitude, checkpoint.longitude, 0, 0, 0.0))
-                    val start = if (axis == ProgressLineAxis.EAST_WEST) Offset(0f, point.y) else Offset(point.x, 0f)
-                    val end = if (axis == ProgressLineAxis.EAST_WEST) Offset(size.width, point.y) else Offset(point.x, size.height)
-                    drawLine(
-                        Color(0xB36E757C), start, end, 1.5.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx())),
-                    )
+                checkpoints.filter { it.showProgressLine }.map { cp ->
+                    val point = anchors.getValue(cp.orderIndex)
+                    if (axis == ProgressLineAxis.EAST_WEST) Offset(0f, point.y) to Offset(size.width, point.y)
+                    else Offset(point.x, 0f) to Offset(point.x, size.height)
+                }
+            } else emptyList()
+            val arrow = Path().apply {
+                if (position != null) {
+                    MATERIAL_NAVIGATION_PATH.forEachIndexed { index, point ->
+                        val x = position.x + (point.x - .5f) * 32.dp.toPx()
+                        val y = position.y + (point.y - .5f) * 32.dp.toPx()
+                        if (index == 0) moveTo(x, y) else lineTo(x, y)
+                    }; close()
                 }
             }
-            checkpoints.forEach { checkpoint ->
-                val originalPoint = projection.project(LocationFix(checkpoint.latitude, checkpoint.longitude, 0, 0, 0.0))
-                val overlapsPosition = scene.currentFix?.let { fix ->
-                    Geometry.distanceMeters(fix.latitude, fix.longitude, checkpoint.latitude, checkpoint.longitude) <= max(checkpoint.radiusMeters, 18.0)
-                } == true
-                val shiftedPoint = if (overlapsPosition) originalPoint + Offset(if (checkpoint.orderIndex % 2 == 0) 24.dp.toPx() else -24.dp.toPx(), -24.dp.toPx()) else originalPoint
-                val markerMargin = 14.dp.toPx()
-                val point = Offset(
-                    shiftedPoint.x.coerceIn(markerMargin, max(markerMargin, size.width - markerMargin)),
-                    shiftedPoint.y.coerceIn(markerMargin, max(markerMargin, size.height - markerMargin)),
-                )
-                val markerRadius = (CHECKPOINT_ICON_DP * .43f).dp.toPx()
-                drawCircle(Color(0xFF121519), markerRadius, point)
-                drawCircle(Color(0xFFDDE3E8), markerRadius, point, style = Stroke(1.5.dp.toPx()))
-                drawIntoCanvas { canvas ->
-                    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                        color = AndroidColor.WHITE
-                        textAlign = Paint.Align.CENTER
-                        textSize = with(density) { (if (checkpoint.label.length > 1) 11 else 14).dp.toPx() }
-                        isFakeBoldText = true
+            val bearing = lastReliableBearing.toFloat()
+            onDrawBehind {
+                if (scene.routeSourceTrack.size > 1) {
+                    drawPath(sourcePath, Color(0xFF05070A), style = Stroke(6.dp.toPx(), cap = StrokeCap.Round))
+                    drawPath(sourcePath, Color(0xFF78848E), style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round))
+                }
+                radii.forEach { (point, radius) -> drawCircle(Color(0x99DDE3E8), radius, Offset(point.x, point.y), style = Stroke(2f)) }
+                actualPaths.forEach { (path, color) -> drawPath(path, color, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round)) }
+                progress.forEach { (start, end) -> drawLine(Color(0x706E757C), start, end, 1.25.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx()))) }
+                placements.forEach { placement ->
+                    val cp = checkpoints.first { it.orderIndex == placement.order }
+                    val anchor = Offset(placement.anchor.x, placement.anchor.y)
+                    val point = Offset(placement.label.x, placement.label.y)
+                    val alpha = if (scene.phase == MapPhase.PREPARING && placement.order != 0) .5f else 1f
+                    drawCircle(Color(0xFFDEE5EB), 2.dp.toPx(), anchor)
+                    if (placement.displaced) drawLine(Color(0xFFAEB8C0).copy(alpha = alpha), anchor, point, 1.dp.toPx())
+                    val markerRadius = (CHECKPOINT_ICON_DP * .43f).dp.toPx()
+                    drawCircle(Color(0xFF121519), markerRadius, point)
+                    drawCircle(Color(0xFFDDE3E8).copy(alpha = alpha), markerRadius, point, style = Stroke(1.5.dp.toPx()))
+                    drawIntoCanvas { canvas ->
+                        val paint = paints.getValue(cp.orderIndex)
+                        paint.alpha = (255 * alpha).toInt()
+                        canvas.nativeCanvas.drawText(cp.label, point.x, point.y - (paint.ascent() + paint.descent()) / 2, paint)
                     }
-                    canvas.nativeCanvas.drawText(checkpoint.label, point.x, point.y - (paint.ascent() + paint.descent()) / 2, paint)
+                }
+                if (position != null) rotate(bearing, position) {
+                    val alpha = if (scene.currentFixStale) .45f else 1f
+                    drawPath(arrow, Color.White.copy(alpha = alpha), style = Stroke(2.25.dp.toPx(), cap = StrokeCap.Round))
+                    drawPath(arrow, Color(0xFF2684FF).copy(alpha = alpha))
                 }
             }
-            scene.currentFix?.let { fix ->
-                val center = projection.project(fix)
-                val iconSize = 32.dp.toPx()
-                val arrow = Path().apply {
-                    val first = MATERIAL_NAVIGATION_PATH.first()
-                    moveTo(center.x + (first.x - .5f) * iconSize, center.y + (first.y - .5f) * iconSize)
-                    MATERIAL_NAVIGATION_PATH.drop(1).forEach { point ->
-                        lineTo(center.x + (point.x - .5f) * iconSize, center.y + (point.y - .5f) * iconSize)
-                    }
-                    close()
-                }
-                rotate(lastReliableBearing.toFloat(), center) {
-                    drawPath(arrow, Color.White, style = Stroke(2.25.dp.toPx(), cap = StrokeCap.Round))
-                    drawPath(arrow, Color(0xFF2684FF))
-                }
-            }
+        })
+    }
+}
+
+private class CanvasViewport {
+    private var cached: MeterProjection? = null
+    private var width = 0f
+    private var height = 0f
+    fun projection(points: List<LocationFix>, fix: LocationFix?, w: Float, h: Float, density: Float): MeterProjection {
+        val current = cached
+        val point = fix?.let { current?.project(it) }
+        val margin = 30f * density
+        val outside = point != null && (point.x < margin || point.y < margin || point.x > w - margin || point.y > h - margin)
+        if (current == null || w != width || h != height || outside) {
+            cached = MeterProjection(points, w, h)
+            width = w; height = h
         }
+        return requireNotNull(cached)
     }
 }
 
@@ -628,6 +700,8 @@ private class MeterProjection(points: List<LocationFix>, private val width: Floa
     private val scale = min(width * .80 / spanX, height * .80 / spanY).toFloat()
     private val centerX = (minX + maxX) / 2
     private val centerY = (minY + maxY) / 2
+
+    fun radiusPixels(meters: Double): Float = (meters * scale).toFloat()
 
     fun project(fix: LocationFix): Offset {
         val (x, y) = Geometry.toLocalMeters(fix.latitude, fix.longitude, originLat, originLon)

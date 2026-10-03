@@ -5,6 +5,7 @@ import app.deltat.commute.domain.LocationFix
 import app.deltat.commute.domain.ResultColor
 
 enum class MapCameraPolicy { FULL_ROUTE_LOCKED, INTERACTIVE_DETAIL, STAGED_RECORDING }
+enum class MapPhase { OVERVIEW, PREPARING, TIMING, COMPLETE }
 
 enum class MapRenderState { LOADING, AVAILABLE, PRIVACY_REQUIRED, KEY_MISSING, OFFLINE, FAILED }
 
@@ -36,4 +37,15 @@ data class MapScene(
     val actualPassElapsedNanos: List<Long> = emptyList(),
     val sectorColors: List<ResultColor> = emptyList(),
     val cameraPolicy: MapCameraPolicy = MapCameraPolicy.FULL_ROUTE_LOCKED,
+    val phase: MapPhase = MapPhase.OVERVIEW,
+    val nextCheckpointIndex: Int = 1,
+    val currentFixStale: Boolean = false,
 )
+
+fun MapScene.displayCheckpoints(): List<MapCheckpoint> = checkpoints.map { checkpoint ->
+    checkpoint.copy(showProgressLine = when (phase) {
+        MapPhase.PREPARING, MapPhase.COMPLETE -> false
+        MapPhase.TIMING -> checkpoint.orderIndex == nextCheckpointIndex && checkpoint.orderIndex in 1..2
+        MapPhase.OVERVIEW -> checkpoint.showProgressLine
+    })
+}

@@ -132,6 +132,9 @@ interface DeltaTDao {
     @Query("SELECT * FROM checkpoint_recalculation_jobs WHERE routeProfileId = :routeId ORDER BY createdAtMillis DESC LIMIT 1")
     fun observeLatestRecalculationJob(routeId: String): Flow<CheckpointRecalculationJobEntity?>
 
+    @Query("SELECT * FROM checkpoint_recalculation_jobs WHERE routeProfileId = :routeId ORDER BY createdAtMillis DESC LIMIT 1")
+    suspend fun latestRecalculationJob(routeId: String): CheckpointRecalculationJobEntity?
+
     @Query("SELECT * FROM checkpoint_recalculation_jobs WHERE routeProfileId = :routeId AND status IN ('PENDING','RUNNING') ORDER BY createdAtMillis DESC LIMIT 1")
     suspend fun activeRecalculationJob(routeId: String): CheckpointRecalculationJobEntity?
 

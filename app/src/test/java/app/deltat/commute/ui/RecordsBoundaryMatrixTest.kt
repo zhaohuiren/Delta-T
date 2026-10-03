@@ -46,7 +46,7 @@ class RecordsBoundaryMatrixTest {
                 assertFalse(month.contains(now - 1))
                 val comparison = comparisonPeriodBounds(now + 1, zone)
                 assertEquals(now, comparison.monthStartMillis)
-                assertTrue(comparison.weekStartMillis >= comparison.monthStartMillis)
+                assertEquals(StatisticsAggregator.range(LeaderboardPeriodFilter.ThisWeek, now + 1, zone).startMillisInclusive, comparison.weekStartMillis)
             }
         }
         val monday = Instant.parse("2026-06-01T00:00:00Z").toEpochMilli()
@@ -62,19 +62,18 @@ class RecordsBoundaryMatrixTest {
         assertEquals(500, series.size)
         assertEquals(0L, series.first().gapNanos)
         assertEquals(86_339_990_000_000L, series.last().gapNanos)
-        val points = tripGapChartCoordinates(series)
-        assertEquals(500, points.size)
-        assertTrue(points.all { it.xFraction.isFinite() && it.yFraction.isFinite() && it.xFraction in 0f..1f && it.yFraction in 0f..1f })
-        assertEquals(20, points.count { it.xFraction == 0f })
+        val axis = gapAxis(series.maxOf { it.gapNanos })
+        assertTrue(axis.topNanos >= series.maxOf { it.gapNanos })
+        assertEquals(495, gapWindowStart(null, series.size))
     }
 
     @Test fun emptySingletonAndTiedTimesHaveDefinedCoordinates() {
-        assertTrue(tripGapChartCoordinates(emptyList()).isEmpty())
+        assertEquals(0, gapWindowStart(null, 0))
         for (count in listOf(1, 2, 10)) {
             val series = StatisticsAggregator.tripGapSeries((0 until count).map { TimedResultSummary("$it", 1, 60_000_000_000) })
             assertEquals(count, series.size)
             assertTrue(series.all { it.gapNanos == 0L })
-            assertTrue(tripGapChartCoordinates(series).all { it.xFraction.isFinite() && it.yFraction.isFinite() })
+            assertTrue(gapAxis(series.maxOf { it.gapNanos }).topNanos > 0)
         }
     }
 }
