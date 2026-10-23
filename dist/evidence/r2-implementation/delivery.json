@@ -1,0 +1,14 @@
+{
+  "localPath": "/Users/renzhaohui/.codex/worktrees/3201/通勤分段计时器_开发计划/dist/Delta-T_v0.6.3-test_20261023-0053_R2界面-F1配色_a41b987e.apk",
+  "fileName": "Delta-T_v0.6.3-test_20261023-0053_R2界面-F1配色_a41b987e.apk",
+  "sha256": "a41b987ebcb5f33d9ce35b25f53ab4fb7a5f14381adee847bb30f9865b5fca02",
+  "builtAt": "2026-10-23T00:53:20.060237+08:00",
+  "size": 123149670,
+  "nasPath": "/volume2/ssd/app/Delta-T_v0.6.3-test_20261023-0053_R2界面-F1配色_a41b987e.apk",
+  "smbPath": "smb://DXP4800-861B._smb._tcp.local/ssd/app/Delta-T_v0.6.3-test_20261023-0053_R2界面-F1配色_a41b987e.apk",
+  "uploaded": true,
+  "nasSha256": "a41b987ebcb5f33d9ce35b25f53ab4fb7a5f14381adee847bb30f9865b5fca02",
+  "nasHost": "DXP4800-861B",
+  "verifiedAt": "2026-10-23T01:10:41.562140+08:00",
+  "transport": "SSH stream; verified before atomic no-overwrite link"
+}

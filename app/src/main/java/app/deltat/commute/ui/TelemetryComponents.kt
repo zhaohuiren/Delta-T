@@ -1,3 +1,4 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package app.deltat.commute.ui
 
 import androidx.compose.foundation.Canvas
@@ -14,6 +15,9 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import app.deltat.commute.map.MapPixel
+import app.deltat.commute.map.layoutMapLabels
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,7 +58,7 @@ fun TelemetryPanel(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
-        modifier.clip(CutCornerShape(topEnd = 18.dp, bottomStart = 8.dp))
+        modifier.clip(RoundedCornerShape(12.dp))
             .background(Surface).padding(16.dp),
         content = content,
     )
@@ -146,11 +150,11 @@ fun ZoomableCheckpointEditor(
     onSave: (List<CheckpointSelection>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var activeIndex by remember { mutableIntStateOf(0) }
-    var positions by remember(track, initialPositions) {
+    var activeIndex by rememberSaveable { mutableIntStateOf(0) }
+    var positions by rememberSaveable(track.size, initialPositions) {
         mutableStateOf(if (initialPositions.size == 4) initialPositions else listOf(0.02, 0.34, 0.66, 0.98).map { it * (track.lastIndex.coerceAtLeast(1)) })
     }
-    var zoom by remember { mutableFloatStateOf(1f) }
+    var zoom by rememberSaveable { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -158,9 +162,10 @@ fun ZoomableCheckpointEditor(
     val labels = listOf("A", "S1", "S2", "B")
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
             labels.forEachIndexed { index, label ->
-                FilterChip(
+                SegmentedButton(
+                    shape = SegmentedButtonDefaults.itemShape(index, labels.size),
                     selected = index == activeIndex,
                     onClick = { activeIndex = index },
                     label = { Text(label) },
@@ -171,7 +176,7 @@ fun ZoomableCheckpointEditor(
         Box(
             Modifier.fillMaxWidth().weight(1f).heightIn(min = 300.dp)
                 .testTag("checkpoint-map")
-                .background(Color(0xFF090C0F), CutCornerShape(topEnd = 18.dp))
+                .clip(RoundedCornerShape(8.dp)).background(Color(0xFF303C47))
                 .onSizeChanged { canvasSize = it }
                 .pointerInput(track, zoom, pan, canvasSize) {
                     detectTapGestures { tap ->
@@ -199,31 +204,31 @@ fun ZoomableCheckpointEditor(
                 val padded = projectTrack(track, IntSize(size.width.roundToInt(), size.height.roundToInt()))
                 drawRoutePath(padded, TelemetryWhite, 2.5f)
             }
-            if (projected.isNotEmpty()) positions.forEachIndexed { index, position ->
-                val base = interpolateOffset(projected, position)
-                val transformed = transform(base, canvasSize, zoom, pan)
-                val markerSize = with(density) { 34.dp.roundToPx() }
-                Box(
-                    Modifier.offset { IntOffset((transformed.x - markerSize / 2).roundToInt(), (transformed.y - markerSize / 2).roundToInt()) }
-                        .testTag("checkpoint-marker-${labels[index]}")
-                        .size(34.dp)
-                        .background(if (index == activeIndex) RacingRed else TelemetryWhite, RoundedCornerShape(50))
-                        .pointerInput(index, projected, zoom, pan) {
-                            var pointer = transformed
-                            detectDragGestures(
-                                onDragStart = { activeIndex = index; pointer = transformed },
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    pointer += amount
-                                    val basePointer = inverseTransform(pointer, canvasSize, zoom, pan)
-                                    nearestPathPosition(basePointer, projected)?.let { value ->
-                                        positions = updateOrderedPosition(positions, index, value, track.lastIndex.toDouble())
-                                    }
-                                },
-                            )
-                        },
-                    contentAlignment = Alignment.Center,
-                ) { Text(labels[index], color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp) }
+            val anchors = positions.mapIndexed { index, position -> index to transform(interpolateOffset(projected, position), canvasSize, zoom, pan).let { MapPixel(it.x,it.y) } }.toMap()
+            val placements = layoutMapLabels(anchors,null,(canvasSize.width-with(density){64.dp.toPx()}).coerceAtLeast(1f),canvasSize.height.toFloat(),density.density,priority=activeIndex)
+            Canvas(Modifier.fillMaxSize()) {
+                placements.forEach { placement ->
+                    val anchor=Offset(placement.anchor.x,placement.anchor.y)
+                    drawCircle(TelemetryWhite,3.dp.toPx(),anchor)
+                    if(placement.visible)drawLine(Muted,anchor,Offset(placement.label.x,placement.label.y),1.dp.toPx())
+                }
+            }
+            if (projected.isNotEmpty()) placements.filter { it.visible }.forEach { placement ->
+                val index=placement.order
+                val transformed=Offset(placement.anchor.x,placement.anchor.y)
+                val label=Offset(placement.label.x,placement.label.y)
+                val markerSize=with(density){48.dp.roundToPx()}
+                Box(Modifier.offset { IntOffset((label.x-markerSize/2).roundToInt(),(label.y-markerSize/2).roundToInt()) }
+                    .testTag("checkpoint-marker-${labels[index]}").size(48.dp)
+                    .pointerInput(index,projected,zoom,pan) {
+                        var pointer=transformed
+                        detectDragGestures(onDragStart={activeIndex=index;pointer=transformed},onDrag={change,amount ->
+                            change.consume();pointer+=amount
+                            nearestPathPosition(inverseTransform(pointer,canvasSize,zoom,pan),projected)?.let{value-> positions=updateOrderedPosition(positions,index,value,track.lastIndex.toDouble()) }
+                        })
+                    },contentAlignment=Alignment.Center) {
+                    Box(Modifier.size(36.dp,28.dp).background(if(index==activeIndex)ActionRed else Color(0xFF202B35),RoundedCornerShape(6.dp)),contentAlignment=Alignment.Center) { Text(labels[index],color=TelemetryWhite,fontWeight=FontWeight.Bold,fontSize=12.sp) }
+                }
             }
             Column(Modifier.align(Alignment.TopEnd).padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 val toolElevation = FloatingActionButtonDefaults.elevation(
@@ -260,6 +265,8 @@ fun ZoomableCheckpointEditor(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { activeIndex = (activeIndex - 1).coerceAtLeast(0) }, enabled = activeIndex > 0, modifier = Modifier.weight(1f)) { Text("上一步") }
             Button(
+                colors = ButtonDefaults.buttonColors(containerColor = ActionRed, contentColor = Color.White),
+                shape = RoundedCornerShape(8.dp),
                 onClick = {
                     if (activeIndex < 3) activeIndex++ else {
                         val validation = validateCheckpointPositions(track, positions)
@@ -275,17 +282,15 @@ fun ZoomableCheckpointEditor(
 
 private fun projectTrack(track: List<TrackPointEntity>, size: IntSize): List<Offset> {
     if (track.isEmpty() || size.width == 0 || size.height == 0) return emptyList()
-    val latMin = track.minOf { it.latitude }; val latMax = track.maxOf { it.latitude }
-    val lonMin = track.minOf { it.longitude }; val lonMax = track.maxOf { it.longitude }
-    val latRange = (latMax - latMin).coerceAtLeast(0.00001)
-    val lonRange = (lonMax - lonMin).coerceAtLeast(0.00001)
-    val pad = 28f
-    return track.map {
-        Offset(
-            pad + ((it.longitude - lonMin) / lonRange).toFloat() * (size.width - pad * 2).coerceAtLeast(1f),
-            pad + (1f - ((it.latitude - latMin) / latRange).toFloat()) * (size.height - pad * 2).coerceAtLeast(1f),
-        )
-    }
+    val latitude = track.map { it.latitude }.average()
+    val longitudeFactor = kotlin.math.cos(Math.toRadians(latitude))
+    val minX=track.minOf { it.longitude*longitudeFactor }; val maxX=track.maxOf { it.longitude*longitudeFactor }
+    val minY=track.minOf { it.latitude }; val maxY=track.maxOf { it.latitude }
+    val pad=minOf(size.width,size.height)*.12f
+    val scale=minOf((size.width-2*pad)/(maxX-minX).coerceAtLeast(.000001),(size.height-2*pad)/(maxY-minY).coerceAtLeast(.000001))
+    val left=(size.width-(maxX-minX)*scale)/2;val top=(size.height-(maxY-minY)*scale)/2
+    return track.map { Offset((left+(it.longitude*longitudeFactor-minX)*scale).toFloat(),(top+(maxY-it.latitude)*scale).toFloat()) }
+
 }
 
 private fun transform(point: Offset, size: IntSize, zoom: Float, pan: Offset): Offset {

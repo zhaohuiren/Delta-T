@@ -7,6 +7,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.SatelliteAlt
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,11 +66,10 @@ internal fun preparingMessage(runtime: RuntimeSnapshot, fixState: FixPresentatio
 
 @Composable
 internal fun CompactGps(runtime: RuntimeSnapshot) {
-    val color = gnssStatusColor(runtime.gnssHealth.displayLabel())
-    Row(Modifier.background(color.copy(alpha = .13f), RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).background(color, RoundedCornerShape(50)))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Default.SatelliteAlt, null, Modifier.size(18.dp), tint = gnssStatusColor(runtime.gnssHealth.displayLabel()))
         Spacer(Modifier.width(6.dp))
-        Text(runtime.gnssHealth.displaySummary(), color = color, fontSize = 14.sp)
+        Text(runtime.gnssHealth.displaySummary(), color = Muted, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -75,14 +77,7 @@ internal fun CompactGps(runtime: RuntimeSnapshot) {
 internal fun TimingStatusRow(runtime: RuntimeSnapshot) {
     FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         CompactGps(runtime)
-        Column(horizontalAlignment = Alignment.End) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("MAX ", color = Muted, fontSize = 11.sp)
-                Text(runtime.maxSpeedMps?.let { "%.1f".format(it * 3.6) } ?: "--", fontSize = 17.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                Text(" km/h", color = Muted, fontSize = 11.sp)
-            }
-            Text("过滤峰值", color = Muted, fontSize = 11.sp)
-        }
+        Text(if (runtime.engineStatus == EngineStatus.COMPLETED) "已完成" else "S${runtime.currentSector.coerceIn(1, 3)} · 计时中", color = Muted, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -90,30 +85,31 @@ internal fun TimingStatusRow(runtime: RuntimeSnapshot) {
 internal fun PreparedTimingContent(runtime: RuntimeSnapshot, fixState: FixPresentation, onSwitchRoute: () -> Unit, onCancel: () -> Unit) {
     val detecting = runtime.routeId == null
     val message = preparingMessage(runtime, fixState)
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row { CompactGps(runtime) }
-        Card(Modifier.fillMaxWidth().heightIn(min = 236.dp), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Surface)) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(message.title, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("距 A 直线距离", color = Muted, fontSize = 13.sp)
-                Text(if (detecting || fixState != FixPresentation.FRESH) "--" else runtime.routeDetectionDistanceMeters?.let { "%.0f m".format(it) } ?: "--", fontSize = 47.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black)
-                Text(message.reason, color = Muted, fontSize = 14.sp)
+    val large = LocalDensity.current.fontScale > 1.15f
+    Column(Modifier.fillMaxSize().then(if (large) Modifier.verticalScroll(rememberScrollState()) else Modifier).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        CompactGps(runtime)
+        DesignPanel {
+            if (detecting) { CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp); Text(message.title, style = MaterialTheme.typography.headlineSmall) }
+            else {
+                Text("${runtime.routeName} · ${message.title}", color = Muted, style = MaterialTheme.typography.bodySmall)
+                Text(if (fixState != FixPresentation.FRESH) "—" else runtime.routeDetectionDistanceMeters?.let { "%.0f m".format(it) } ?: "—", fontSize = 44.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
             }
+            Text(message.reason, color = Muted, style = MaterialTheme.typography.bodySmall)
         }
-        if (detecting) Box(Modifier.fillMaxWidth().aspectRatio(TIMING_MAP_ASPECT).background(Surface, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
-            Text("识别路线后显示地图", color = Muted)
-        } else TimingMap(runtime, fixState, MapPhase.PREPARING, Modifier.fillMaxWidth().aspectRatio(TIMING_MAP_ASPECT))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (!detecting) OutlinedButton(onSwitchRoute, Modifier.weight(1f).heightIn(min = 48.dp)) { Text("更换路线") }
-            OutlinedButton(onCancel, Modifier.weight(1f).heightIn(min = 48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF7777))) { Text("取消准备") }
+        val mapModifier = Modifier.fillMaxWidth().then(if (large) Modifier.height(330.dp) else Modifier.weight(1f))
+        if (detecting) Box(mapModifier, contentAlignment = Alignment.CenterStart) { Text("识别路线后显示地图", color = Muted) }
+        else TimingMap(runtime, fixState, MapPhase.PREPARING, mapModifier)
+        if (!detecting) OutlinedButton(onSwitchRoute, Modifier.fillMaxWidth()) { Text("更换路线") }
+        TextButton(onCancel, Modifier.fillMaxWidth()) { Text("取消准备") }
+        Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.Center) {
+            Icon(Icons.Default.Lock, null, Modifier.size(14.dp), tint = Muted); Spacer(Modifier.width(6.dp)); Text("计时尚未开始 · 可锁屏等待", color = Muted, style = MaterialTheme.typography.bodySmall)
         }
-        Text("计时尚未开始 · 可锁屏等待", color = Muted, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
     }
 }
 
 @Composable
 internal fun TimingMap(runtime: RuntimeSnapshot, fixState: FixPresentation, phase: MapPhase, modifier: Modifier) {
-    val colors = remember(runtime.sectors) { (0..2).map { runtime.sectors.getOrNull(it)?.color ?: app.deltat.commute.domain.ResultColor.NEUTRAL } }
+    val colors = remember(runtime.sectors) { (0..2).map { runtime.sectors.firstOrNull { sector -> sector.index == it }?.color ?: app.deltat.commute.domain.ResultColor.NEUTRAL } }
     TelemetryRoute(runtime.track, routeSourcePoints = runtime.routeSourceTrack.ifEmpty { runtime.referenceTrack },
         checkpoints = runtime.routeCheckpoints, currentFix = runtime.lastFix,
         actualPassElapsedNanos = runtime.actualPassElapsedNanos, sectorColors = colors,
@@ -133,10 +129,10 @@ internal fun LiveTimer(runtime: RuntimeSnapshot, completed: Boolean, clock: () -
 
 @Composable
 private fun TimerDigits(text: String) {
-    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
         val scale = LocalDensity.current.fontScale
-        val fontSize = minOf(47f, maxWidth.value / (text.length * .61f * scale)).sp
-        Text(text, Modifier.testTag("live-timer"), fontSize = fontSize, lineHeight = 54.sp,
-            fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, maxLines = 1)
+        val fontSize = minOf(52f, maxWidth.value / (text.length * .61f * scale)).sp
+        Text(text, Modifier.fillMaxWidth().testTag("live-timer"), fontSize = fontSize, lineHeight = 54.sp,
+            fontWeight = FontWeight.SemiBold, fontFamily = FontFamily.Monospace, maxLines = 1)
     }
 }

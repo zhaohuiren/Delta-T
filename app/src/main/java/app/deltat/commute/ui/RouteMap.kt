@@ -37,6 +37,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -94,7 +96,8 @@ private val MATERIAL_NAVIGATION_PATH = listOf(
     Offset(.81f, .84f),
 )
 
-internal const val CHECKPOINT_ICON_DP = 26f
+internal const val CHECKPOINT_ICON_DP = 36f
+internal const val CHECKPOINT_ICON_HEIGHT_DP = 28f
 
 data class MapFeatureConfig(
     val sdkAvailable: Boolean = false,
@@ -159,7 +162,7 @@ private fun AmapScene(scene: MapScene, modifier: Modifier, onFailure: () -> Unit
                 View(viewContext)
             }
         },
-        modifier = modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xFF090C0F)).testTag("route-map"),
+        modifier = modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xFF303C47)).testTag("route-map"),
         update = {
             try {
                 controller.update(scene)
@@ -214,7 +217,7 @@ private class AmapSceneController(
                 showBuildings(false)
                 backgroundShade = addPolygon(
                     PolygonOptions().add(LatLng(5.0, 60.0), LatLng(60.0, 60.0), LatLng(60.0, 150.0), LatLng(5.0, 150.0))
-                        .fillColor(AndroidColor.argb(218, 0, 0, 0)).strokeWidth(0f).zIndex(0f),
+                        .fillColor(AndroidColor.argb(64, 0, 0, 0)).strokeWidth(0f).zIndex(0f),
                 )
                 uiSettings.isZoomControlsEnabled = false
                 uiSettings.isScaleControlsEnabled = true
@@ -373,7 +376,8 @@ private class AmapSceneController(
         val view = mapView ?: return
         if (view.width <= 0 || view.height <= 0) return
         val density = appContext.resources.displayMetrics.density
-        val anchors = checkpointMarkers.filterValues { it.isVisible }.mapValues { (_, marker) ->
+        val presentOrders = latestScene?.displayCheckpoints()?.map { it.orderIndex }.orEmpty()
+        val anchors = anchorMarkers.filterKeys { it in presentOrders }.mapValues { (_, marker) ->
             projection.toScreenLocation(marker.position).let { MapPixel(it.x.toFloat(), it.y.toFloat()) }
         }
         val position = positionMarker?.takeIf { it.isVisible }?.let { projection.toScreenLocation(it.position) }?.let { MapPixel(it.x.toFloat(), it.y.toFloat()) }
@@ -382,14 +386,16 @@ private class AmapSceneController(
         labelSlots = placements.associate { it.order to it.slot }
         placements.forEach { placement ->
             val marker = checkpointMarkers.getValue(placement.order)
+            marker.isVisible = placement.visible
+            anchorMarkers[placement.order]?.isVisible = position == null || kotlin.math.hypot(placement.anchor.x-position.x, placement.anchor.y-position.y) > 22f*density
             marker.setAnchor(.5f - (placement.label.x - placement.anchor.x) / (CHECKPOINT_ICON_DP * density),
-                .5f - (placement.label.y - placement.anchor.y) / (CHECKPOINT_ICON_DP * density))
+                .5f - (placement.label.y - placement.anchor.y) / (CHECKPOINT_ICON_HEIGHT_DP * density))
             val labelPosition = projection.fromScreenLocation(android.graphics.Point(placement.label.x.toInt(), placement.label.y.toInt()))
             val leader = labelLeaders[placement.order] ?: map!!.addPolyline(
                 PolylineOptions().add(marker.position, labelPosition).width(density).color(0xFFAEB8C0.toInt()).zIndex(7f)
             ).also { labelLeaders[placement.order] = it }
             leader.points = listOf(marker.position, labelPosition)
-            leader.isVisible = placement.displaced
+            leader.isVisible = placement.visible && placement.displaced
         }
     }
 
@@ -538,23 +544,17 @@ private class AmapSceneController(
     private fun checkpointIcon(label: String): BitmapDescriptor {
         checkpointIcons[label]?.let { return it }
         val density = appContext.resources.displayMetrics.density
-        val size = (CHECKPOINT_ICON_DP * density).toInt().coerceAtLeast(CHECKPOINT_ICON_DP.toInt())
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val width = (CHECKPOINT_ICON_DP * density).toInt().coerceAtLeast(36)
+        val height = (CHECKPOINT_ICON_HEIGHT_DP * density).toInt().coerceAtLeast(28)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = AndroidCanvas(bitmap)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        paint.color = AndroidColor.rgb(18, 21, 25)
-        canvas.drawCircle(size / 2f, size / 2f, size * .43f, paint)
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 1.5f * density
-        paint.color = AndroidColor.rgb(221, 227, 232)
-        canvas.drawCircle(size / 2f, size / 2f, size * .43f, paint)
-        paint.style = Paint.Style.FILL
-        paint.color = AndroidColor.WHITE
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = AndroidColor.rgb(32, 43, 53) }
+        canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), 6*density, 6*density, paint)
+        paint.color = AndroidColor.rgb(241,244,247)
         paint.textAlign = Paint.Align.CENTER
-        paint.textSize = (if (label.length > 1) 11 else 14) * density
+        paint.textSize = 12*density
         paint.isFakeBoldText = true
-        val baseline = size / 2f - (paint.ascent() + paint.descent()) / 2
-        canvas.drawText(label, size / 2f, baseline, paint)
+        canvas.drawText(label, width/2f, height/2f-(paint.ascent()+paint.descent())/2, paint)
         return BitmapDescriptorFactory.fromBitmap(bitmap).also { checkpointIcons[label] = it }
     }
 
@@ -593,7 +593,7 @@ private fun AbstractMapScene(scene: MapScene, modifier: Modifier) {
     LaunchedEffect(reliableBearing) { if (reliableBearing != null) lastReliableBearing = reliableBearing }
     val viewport = remember(scene.routeSourceTrack, scene.checkpoints, scene.phase, scene.cameraPolicy) { CanvasViewport() }
     val slots = remember(scene.checkpoints) { mutableMapOf<Int, Int>() }
-    Box(modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xFF090C0F)).graphicsLayer().testTag("abstract-route-map")) {
+    Box(modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xFF303C47)).graphicsLayer().testTag("abstract-route-map")) {
         Spacer(Modifier.fillMaxSize().drawWithCache {
             val checkpoints = scene.displayCheckpoints().sortedBy { it.orderIndex }
             val checkpointFixes = checkpoints.map { LocationFix(it.latitude, it.longitude, 0, 0, 0.0) }
@@ -638,22 +638,21 @@ private fun AbstractMapScene(scene: MapScene, modifier: Modifier) {
             val bearing = lastReliableBearing.toFloat()
             onDrawBehind {
                 if (scene.routeSourceTrack.size > 1) {
-                    drawPath(sourcePath, Color(0xFF05070A), style = Stroke(6.dp.toPx(), cap = StrokeCap.Round))
-                    drawPath(sourcePath, Color(0xFF78848E), style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round))
+                    drawPath(sourcePath, Color(0xFF05070A), style = Stroke(6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                    drawPath(sourcePath, Color(0xFF78848E), style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
                 }
                 radii.forEach { (point, radius) -> drawCircle(Color(0x99DDE3E8), radius, Offset(point.x, point.y), style = Stroke(2f)) }
-                actualPaths.forEach { (path, color) -> drawPath(path, color, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round)) }
+                actualPaths.forEach { (path, color) -> drawPath(path, color, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)) }
                 progress.forEach { (start, end) -> drawLine(Color(0x706E757C), start, end, 1.25.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx()))) }
                 placements.forEach { placement ->
                     val cp = checkpoints.first { it.orderIndex == placement.order }
                     val anchor = Offset(placement.anchor.x, placement.anchor.y)
                     val point = Offset(placement.label.x, placement.label.y)
                     val alpha = if (scene.phase == MapPhase.PREPARING && placement.order != 0) .5f else 1f
-                    drawCircle(Color(0xFFDEE5EB), 2.dp.toPx(), anchor)
+                    if (position == null || (anchor-position).getDistance() > 22.dp.toPx()) drawCircle(Color(0xFFDEE5EB), 2.dp.toPx(), anchor)
+                    if (!placement.visible) return@forEach
                     if (placement.displaced) drawLine(Color(0xFFAEB8C0).copy(alpha = alpha), anchor, point, 1.dp.toPx())
-                    val markerRadius = (CHECKPOINT_ICON_DP * .43f).dp.toPx()
-                    drawCircle(Color(0xFF121519), markerRadius, point)
-                    drawCircle(Color(0xFFDDE3E8).copy(alpha = alpha), markerRadius, point, style = Stroke(1.5.dp.toPx()))
+                    drawRoundRect(Color(0xFF202B35).copy(alpha = alpha), point - Offset(18.dp.toPx(), 14.dp.toPx()), androidx.compose.ui.geometry.Size(36.dp.toPx(), 28.dp.toPx()), CornerRadius(6.dp.toPx()))
                     drawIntoCanvas { canvas ->
                         val paint = paints.getValue(cp.orderIndex)
                         paint.alpha = (255 * alpha).toInt()
@@ -662,7 +661,7 @@ private fun AbstractMapScene(scene: MapScene, modifier: Modifier) {
                 }
                 if (position != null) rotate(bearing, position) {
                     val alpha = if (scene.currentFixStale) .45f else 1f
-                    drawPath(arrow, Color.White.copy(alpha = alpha), style = Stroke(2.25.dp.toPx(), cap = StrokeCap.Round))
+                    drawPath(arrow, Color.White.copy(alpha = alpha), style = Stroke(2.25.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
                     drawPath(arrow, Color(0xFF2684FF).copy(alpha = alpha))
                 }
             }

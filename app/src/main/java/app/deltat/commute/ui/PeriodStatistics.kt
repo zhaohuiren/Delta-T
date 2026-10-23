@@ -1,6 +1,11 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package app.deltat.commute.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -77,169 +82,132 @@ internal fun gapAxis(maxGapNanos: Long): GapAxis {
     return GapAxis(minOf(displayStep, Long.MAX_VALUE / 3 + 1), unit.first, unit.second)
 }
 
+internal enum class StatisticsSort(val label: String) { DATE("时间先后"), FASTEST("用时从快到慢"), SLOWEST("用时从慢到快") }
+internal fun medianDuration(rows: List<LeaderboardRow>): Long? {
+    val values = rows.map { it.totalDurationNanos }.sorted()
+    if (values.isEmpty()) return null
+    val middle = values.size / 2
+    return if (values.size % 2 == 1) values[middle] else values[middle-1] + (values[middle]-values[middle-1])/2
+}
+internal fun sortedStatisticsRows(rows: List<LeaderboardRow>, sort: StatisticsSort): List<LeaderboardRow> {
+    val tie = compareBy<LeaderboardRow> { it.startedWallTimeMillis }.thenBy { it.sessionId }
+    return rows.sortedWith(when(sort) {
+        StatisticsSort.DATE -> tie
+        StatisticsSort.FASTEST -> compareBy<LeaderboardRow> { it.totalDurationNanos }.then(tie)
+        StatisticsSort.SLOWEST -> compareByDescending<LeaderboardRow> { it.totalDurationNanos }.then(tie)
+    })
+}
+internal fun medianDifferenceLabel(delta: Long): String = when {
+    delta < 0 -> "比中位数快 ${formatRecordDuration(-delta)}"
+    delta > 0 -> "比中位数慢 ${formatRecordDuration(delta)}"
+    else -> "与中位数持平"
+}
+
 @Composable
-internal fun PeriodStatisticsSection(allRows: List<LeaderboardRow>, monthly: Boolean, nowMillis: Long) {
+internal fun PeriodStatisticsSection(allRows: List<LeaderboardRow>, monthly: Boolean, nowMillis: Long, onOpenSession: (String) -> Unit = {}) {
     val zone = ZoneId.systemDefault()
     val eligibleRows = remember(allRows, nowMillis) { allRows.filter { it.startedWallTimeMillis <= nowMillis } }
-    val summaries = remember(eligibleRows) { eligibleRows.map { TimedResultSummary(it.sessionId, it.startedWallTimeMillis, it.totalDurationNanos) } }
-    val aggregates = remember(summaries, monthly, zone) { if (monthly) StatisticsAggregator.monthly(summaries, zone) else StatisticsAggregator.weekly(summaries, zone) }
+    val periods = remember(eligibleRows, monthly, zone) { eligibleRows.groupBy { statisticsPeriodStart(Instant.ofEpochMilli(it.startedWallTimeMillis).atZone(zone).toLocalDate(), monthly) }.toSortedMap() }
     var selectedStartIso by rememberSaveable { mutableStateOf<String?>(null) }
     var requestedWindow by rememberSaveable { mutableStateOf<Int?>(null) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedIndexHint by rememberSaveable { mutableIntStateOf(Int.MAX_VALUE) }
+    var sortName by rememberSaveable { mutableStateOf(StatisticsSort.DATE.name) }
     var historyExpanded by rememberSaveable { mutableStateOf(false) }
-    val today = Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
-    val currentPeriod = statisticsPeriodStart(today, monthly)
-    val start = selectedStartIso?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-        ?: aggregates.lastOrNull()?.periodStart ?: currentPeriod
-    LaunchedEffect(start, aggregates.isNotEmpty()) {
-        if (selectedStartIso == null && aggregates.isNotEmpty()) selectedStartIso = start.toString()
-    }
-    val rows = remember(eligibleRows, start, monthly, zone) { statisticsPeriodRows(eligibleRows, start, monthly, zone) }
-    val aggregate = aggregates.firstOrNull { it.periodStart == start }
-    val best = remember(rows) { rows.minOfOrNull { it.totalDurationNanos } }
-    val axis = remember(rows, best) { gapAxis(rows.maxOfOrNull { it.totalDurationNanos - (best ?: 0) } ?: 0) }
-    val first = gapWindowStart(requestedWindow, rows.size)
+    var sheet by rememberSaveable { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    val sort = StatisticsSort.valueOf(sortName)
+    val currentPeriod = statisticsPeriodStart(Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate(), monthly)
+    val start = selectedStartIso?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: periods.keys.lastOrNull() ?: currentPeriod
+    LaunchedEffect(start, periods.isNotEmpty()) { if (selectedStartIso == null && periods.isNotEmpty()) selectedStartIso = start.toString() }
+    val chronological = remember(eligibleRows, start, monthly, zone) { statisticsPeriodRows(eligibleRows, start, monthly, zone) }
+    val rows = remember(chronological, sort) { sortedStatisticsRows(chronological, sort) }
+    val median = remember(chronological) { medianDuration(chronological) }
+    val axis = remember(chronological, median) { gapAxis(chronological.maxOfOrNull { kotlin.math.abs(it.totalDurationNanos - (median ?: 0)) } ?: 0) }
+    val first = gapWindowStart(requestedWindow ?: if (sort == StatisticsSort.DATE) null else 0, rows.size)
     val visible = rows.drop(first).take(5)
-    val selectedRow = visible.firstOrNull { it.sessionId == selectedId }
-        ?: rows.getOrNull(selectedIndexHint.coerceIn(first, (first + visible.size - 1).coerceAtLeast(first)))
-    val ordinal = remember(rows, zone) {
-        val counts = mutableMapOf<LocalDate, Int>()
-        rows.associate { row ->
-            val date = Instant.ofEpochMilli(row.startedWallTimeMillis).atZone(zone).toLocalDate()
-            val next = (counts[date] ?: 0) + 1; counts[date] = next; row.sessionId to next
-        }
+    val selectedRow = rows.firstOrNull { it.sessionId == selectedId } ?: rows.getOrNull(selectedIndexHint.coerceIn(0, (rows.size-1).coerceAtLeast(0)))
+    LaunchedEffect(selectedRow?.sessionId) { if (selectedRow == null) sheet = false }
+    val ordinal = remember(chronological, zone) {
+        val counts = mutableMapOf<LocalDate,Int>()
+        chronological.associate { row -> val date = Instant.ofEpochMilli(row.startedWallTimeMillis).atZone(zone).toLocalDate(); val next = (counts[date] ?: 0)+1; counts[date] = next; row.sessionId to next }
     }
-    val accent = if (monthly) Purple else Green
-    fun selectPeriod(value: LocalDate) {
-        selectedStartIso = value.toString(); requestedWindow = null; selectedId = null; selectedIndexHint = Int.MAX_VALUE
-    }
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    fun selectPeriod(value: LocalDate) { selectedStartIso = value.toString(); requestedWindow = null; selectedId = null; selectedIndexHint = Int.MAX_VALUE; sheet = false }
+    fun select(row: LeaderboardRow) { selectedId = row.sessionId; selectedIndexHint = rows.indexOf(row); sheet = true }
+    fun shift(amount: Int) { requestedWindow = (first+amount).coerceIn(0,(rows.size-5).coerceAtLeast(0)) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { selectPeriod(if (monthly) start.minusMonths(1) else start.minusWeeks(1)) }, modifier = Modifier.sizeIn(minWidth = 44.dp, minHeight = 44.dp).testTag("stats-previous-period")) { Text("‹", fontSize = 24.sp) }
-            Text(periodStatisticsLabel(start, monthly), Modifier.weight(1f).testTag("stats-period"), fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            TextButton(onClick = { selectPeriod(if (monthly) start.plusMonths(1) else start.plusWeeks(1)) }, enabled = start < maxOf(currentPeriod, aggregates.lastOrNull()?.periodStart ?: currentPeriod), modifier = Modifier.sizeIn(minWidth = 44.dp, minHeight = 44.dp).testTag("stats-next-period")) { Text("›", fontSize = 24.sp) }
+            IconButton(onClick = { selectPeriod(if (monthly) start.minusMonths(1) else start.minusWeeks(1)) }, modifier = Modifier.testTag("stats-previous-period")) { Icon(Icons.Default.ChevronLeft,"上一个周期") }
+            Text(periodStatisticsLabel(start,monthly),Modifier.weight(1f).testTag("stats-period"),style=MaterialTheme.typography.titleMedium)
+            IconButton(onClick = { selectPeriod(if (monthly) start.plusMonths(1) else start.plusWeeks(1)) }, enabled=start<maxOf(currentPeriod,periods.keys.lastOrNull()?:currentPeriod),modifier=Modifier.testTag("stats-next-period")) { Icon(Icons.Default.ChevronRight,"下一个周期") }
         }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Surface)) {
-            Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (monthly) "月平均" else "周平均", color = accent, fontWeight = FontWeight.Bold)
-                Text(aggregate?.averageDurationNanos?.let(::formatRecordDuration) ?: "--", fontSize = 42.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black)
-                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${rows.size} 次有效行程", color = Muted, fontSize = 12.sp)
-                    Text("最快 ${best?.let(::formatRecordDuration) ?: "--"}", fontSize = 12.sp)
+        if (median == null) { Text("这个周期还没有有效行程",Modifier.fillMaxWidth().padding(vertical=40.dp),color=Muted) }
+        else {
+            DesignPanel {
+                FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) { Text("典型用时 · 中位数",color=Muted,style=MaterialTheme.typography.bodySmall);Text("${rows.size} 次有效行程",color=Muted,style=MaterialTheme.typography.bodySmall) }
+                DesignTimeValue(formatRecordDuration(median),38f,Modifier.testTag("stats-median"))
+            }
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                Text("与典型用时的差值",Modifier.weight(1f),style=MaterialTheme.typography.titleSmall)
+                Box {
+                    TextButton(onClick={menu=true},modifier=Modifier.testTag("stats-sort")){Icon(Icons.Default.Sort,null,Modifier.size(18.dp));Spacer(Modifier.width(4.dp));Text(sort.label,style=MaterialTheme.typography.labelMedium)}
+                    DropdownMenu(menu,{menu=false}) { StatisticsSort.entries.forEach { option -> DropdownMenuItem(text={Text(option.label)},onClick={sortName=option.name;requestedWindow=null;menu=false},leadingIcon=if(option==sort)({Icon(Icons.Default.Check,null)})else null) } }
                 }
             }
-        }
-        Card(Modifier.fillMaxWidth().testTag("trip-gap-chart"), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Surface)) {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("每次行程 GAP", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Text("越低越接近最快", color = Muted, fontSize = 11.sp)
-                }
-                Text(if (best == null) "暂无比较基准" else "相对${if (monthly) "本月" else "本周"}最快 ${formatRecordDuration(best)} · ${axis.unitLabel}", color = Muted, fontSize = 12.sp, modifier = Modifier.testTag("stats-gap-baseline"))
-                if (rows.isEmpty()) {
-                    Text("这个周期还没有有效行程", Modifier.fillMaxWidth().padding(vertical = 32.dp), color = Muted, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                } else {
-                    GapBars(visible, best!!, axis, selectedRow?.sessionId, ordinal, accent, zone) { row ->
-                        selectedId = row.sessionId; selectedIndexHint = rows.indexOfFirst { it.sessionId == row.sessionId }
-                    }
-                    Text("行程顺序 · 日期／当日第几次", color = Muted, fontSize = 11.sp, modifier = Modifier.align(Alignment.End))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { requestedWindow = (first - 5).coerceAtLeast(0); selectedId = null; selectedIndexHint = Int.MAX_VALUE }, enabled = first > 0, modifier = Modifier.testTag("stats-earlier")) { Text("较早", fontSize = 11.sp) }
-                        Text("第 ${first + 1}–${first + visible.size} 次／共 ${rows.size} 次", Modifier.weight(1f).testTag("stats-window"), color = Muted, fontSize = 11.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                        TextButton(onClick = { requestedWindow = (first + 5).coerceAtMost((rows.size - 5).coerceAtLeast(0)); selectedId = null; selectedIndexHint = Int.MAX_VALUE }, enabled = first + 5 < rows.size, modifier = Modifier.testTag("stats-later")) { Text("较晚", fontSize = 11.sp) }
-                    }
-                    selectedRow?.let { row ->
-                        HorizontalDivider(color = Color(0xFF30363D))
-                        Column(Modifier.fillMaxWidth().testTag("stats-selected-trip"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("${Instant.ofEpochMilli(row.startedWallTimeMillis).atZone(zone).format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))} · 第 ${ordinal[row.sessionId]} 次", color = Muted, fontSize = 12.sp)
-                                Text(if (row.totalDurationNanos == best) "GAP 0 · 本期最快" else "GAP +${formatRecordDuration(row.totalDurationNanos - best)}", fontSize = 12.sp)
-                            }
-                            Text(formatRecordDuration(row.totalDurationNanos), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 25.sp)
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf(row.sector1Nanos, row.sector2Nanos, row.sector3Nanos).forEachIndexed { index, nanos ->
-                                    Column(Modifier.weight(1f)) {
-                                        Text(listOf("A→S1", "S1→S2", "S2→B")[index], color = Muted, fontSize = 11.sp)
-                                        Text(nanos?.let(::formatRecordDuration) ?: "--", fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-                                        val missing = when (index) { 0 -> row.missingCheckpointMask and 2 != 0; 1 -> row.missingCheckpointMask and 6 != 0; else -> row.missingCheckpointMask and 4 != 0 }
-                                        if (missing) Text("检查点缺失", color = Muted, fontSize = 11.sp)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            SignedGapBars(visible,median,axis,selectedRow?.sessionId,ordinal,zone,{shift(it)},::select)
+            Text("上方较慢 · 下方较快 · 零线为本期中位数",color=Muted,style=MaterialTheme.typography.bodySmall,modifier=Modifier.testTag("stats-gap-baseline"))
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                TextButton(onClick={shift(-5)},enabled=first>0,modifier=Modifier.testTag("stats-earlier")){Text("较早")}
+                Text("第 ${first+1}–${first+visible.size} 次／共 ${rows.size} 次 · 左右滑动",Modifier.weight(1f).testTag("stats-window"),color=Muted,fontSize=11.sp,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+                TextButton(onClick={shift(5)},enabled=first+5<rows.size,modifier=Modifier.testTag("stats-later")){Text("较晚")}
             }
+            selectedRow?.let { row -> ListItem(headlineContent={Text("${Instant.ofEpochMilli(row.startedWallTimeMillis).atZone(zone).format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))} · ${formatRecordDuration(row.totalDurationNanos)}")},supportingContent={Text(medianDifferenceLabel(row.totalDurationNanos-median))},leadingContent={Icon(Icons.Default.Timer,null)},trailingContent={Icon(Icons.Default.ExpandLess,null)},colors=ListItemDefaults.colors(containerColor=Surface),modifier=Modifier.testTag("stats-selected-trip").clickable{select(row)}) }
         }
-        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = Surface)) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                TextButton(onClick = { historyExpanded = !historyExpanded }, modifier = Modifier.fillMaxWidth().testTag("stats-period-history")) {
-                    Text("${if (historyExpanded) "▾" else "▸"} 各${if (monthly) "月" else "周"}平均", color = Muted, fontSize = 13.sp, modifier = Modifier.fillMaxWidth())
-                }
-                if (historyExpanded) {
-                    if (aggregates.isEmpty()) Text("暂无有效周期", color = Muted, modifier = Modifier.padding(vertical = 12.dp))
-                    aggregates.asReversed().forEach { item ->
-                        FlowRow(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("${periodStatisticsLabel(item.periodStart, monthly)} · ${item.tripCount} 次", fontSize = 12.sp)
-                            Text(formatRecordDuration(item.averageDurationNanos), fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-                        }
-                    }
-                }
+        TextButton(onClick={historyExpanded=!historyExpanded},modifier=Modifier.testTag("stats-period-history")){Text("各${if(monthly)"月" else "周"}典型用时");Icon(if(historyExpanded)Icons.Default.ExpandLess else Icons.Default.ExpandMore,null)}
+        if(historyExpanded) periods.entries.reversed().forEach { (date, group) ->
+            ListItem(headlineContent={Text(periodStatisticsLabel(date,monthly))},supportingContent={Text("${group.size} 次有效行程")},trailingContent={Text(formatRecordDuration(medianDuration(group)!!),fontFamily=FontFamily.Monospace)},colors=ListItemDefaults.colors(containerColor=Surface))
+        }
+    }
+    if(sheet && selectedRow!=null && median!=null) {
+        val row=selectedRow
+        ModalBottomSheet(onDismissRequest={sheet=false},sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true),containerColor=SurfaceHigh) {
+            Column(Modifier.fillMaxWidth().padding(start=24.dp,end=24.dp,bottom=24.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
+                Text("${row.routeName} · ${Instant.ofEpochMilli(row.startedWallTimeMillis).atZone(zone).format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))}",color=Muted,style=MaterialTheme.typography.bodySmall)
+                DesignTimeValue(formatRecordDuration(row.totalDurationNanos),40f)
+                Text(medianDifferenceLabel(row.totalDurationNanos-median),color=ChartBlue)
+                HorizontalDivider(color=Outline)
+                listOf(row.sector1Nanos,row.sector2Nanos,row.sector3Nanos).forEachIndexed { index,nanos -> Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(listOf("A → S1","S1 → S2","S2 → B")[index]);Text(nanos?.let(::formatRecordDuration)?:"—",fontFamily=FontFamily.Monospace)} }
+                Text("有效 · 质量 ${row.qualityGrade} · 当前计时点${if(row.missingCheckpointMask!=0)" · 部分检查点缺失" else ""}",color=Muted,style=MaterialTheme.typography.bodySmall)
+                DesignAction("查看完整行程",{sheet=false;onOpenSession(row.sessionId)},icon=Icons.Default.Route)
             }
         }
     }
 }
 
 @Composable
-private fun GapBars(rows: List<LeaderboardRow>, best: Long, axis: GapAxis, selectedId: String?, ordinal: Map<String, Int>, accent: Color, zone: ZoneId, onSelect: (LeaderboardRow) -> Unit) {
-    Row(Modifier.fillMaxWidth()) {
-        Box(Modifier.width(40.dp).height(168.dp)) {
-            (3 downTo 0).forEach { index ->
-                ChartLabel(axis.label(index), Modifier.fillMaxWidth().offset(y = (56 * (3 - index) - 10).dp).height(20.dp).padding(end = 5.dp).testTag("gap-axis-$index"), Muted, 10f, Alignment.CenterEnd)
-            }
+private fun SignedGapBars(rows:List<LeaderboardRow>,median:Long,axis:GapAxis,selectedId:String?,ordinal:Map<String,Int>,zone:ZoneId,onShift:(Int)->Unit,onSelect:(LeaderboardRow)->Unit) {
+    var drag by remember { mutableFloatStateOf(0f) }
+    val threshold=with(LocalDensity.current){48.dp.toPx()}
+    Row(Modifier.fillMaxWidth().testTag("trip-gap-chart").pointerInput(rows.map{it.sessionId}) { detectHorizontalDragGestures(onDragStart={drag=0f},onDragCancel={drag=0f},onDragEnd={if(kotlin.math.abs(drag)>threshold)onShift(if(drag<0)5 else -5);drag=0f}){change,amount->change.consume();drag+=amount} }) {
+        Column(Modifier.width(48.dp).height(186.dp),verticalArrangement=Arrangement.SpaceBetween) {
+            Text("${axis.label(3)}${axis.unitLabel}",color=Muted,fontSize=10.sp,modifier=Modifier.fillMaxWidth().testTag("gap-axis-3"))
+            Text("0",color=Muted,fontSize=10.sp)
+            Text("−${axis.label(3).removePrefix("+")}${axis.unitLabel}",color=Muted,fontSize=10.sp)
         }
         Box(Modifier.weight(1f)) {
-            Canvas(Modifier.fillMaxWidth().height(168.dp)) {
-                (0..3).forEach { index ->
-                    val y = size.height * index / 3
-                    drawLine(Color(0xFF303942), Offset(0f, y), Offset(size.width, y), 1.dp.toPx())
-                }
-            }
-            Row(Modifier.fillMaxWidth()) {
-                rows.forEach { row ->
-                    val gap = row.totalDurationNanos - best
-                    val date = Instant.ofEpochMilli(row.startedWallTimeMillis).atZone(zone)
-                    Column(Modifier.weight(1f).testTag("trip-bar-${row.sessionId}")
-                        .semantics { selected = row.sessionId == selectedId; contentDescription = "${date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))}，第${ordinal[row.sessionId]}次，用时${formatRecordDuration(row.totalDurationNanos)}，${if (gap == 0L) "GAP 0，最快" else "GAP +${formatRecordDuration(gap)}"}" }
-                        .clickable { onSelect(row) }, horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(Modifier.fillMaxWidth().height(168.dp), contentAlignment = Alignment.BottomCenter) {
-                            if (gap == 0L) Box(Modifier.offset(y = 4.dp).size(8.dp).background(accent, RoundedCornerShape(50)))
-                            else Box(Modifier.fillMaxWidth(.58f).fillMaxHeight((gap.toDouble() / axis.topNanos).toFloat().coerceIn(0f, 1f)).background(if (row.sessionId == selectedId) TelemetryWhite else Color(0xFF75818D)))
-                        }
-                        ChartLabel(date.format(DateTimeFormatter.ofPattern("MM-dd")), Modifier.fillMaxWidth().padding(top = 6.dp), if (row.sessionId == selectedId) TelemetryWhite else Muted)
-                        ChartLabel(if (gap == 0L) "最快" else "第${ordinal[row.sessionId]}次", Modifier.fillMaxWidth(), Muted)
+            Canvas(Modifier.fillMaxWidth().height(186.dp)) { listOf(0f,.5f,1f).forEach { ratio-> drawLine(if(ratio==.5f)Muted else Outline.copy(alpha=.4f),Offset(0f,size.height*ratio),Offset(size.width,size.height*ratio),if(ratio==.5f)2.dp.toPx() else 1.dp.toPx()) } }
+            Row(Modifier.fillMaxWidth()) { rows.forEach { row ->
+                val gap=row.totalDurationNanos-median;val date=Instant.ofEpochMilli(row.startedWallTimeMillis).atZone(zone)
+                Column(Modifier.weight(1f).testTag("trip-bar-${row.sessionId}").semantics{selected=row.sessionId==selectedId;contentDescription="${date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))}，第${ordinal[row.sessionId]}次，用时${formatRecordDuration(row.totalDurationNanos)}，${medianDifferenceLabel(gap)}"}.clickable{onSelect(row)},horizontalAlignment=Alignment.CenterHorizontally) {
+                    Box(Modifier.fillMaxWidth().height(186.dp)) {
+                        val h=(kotlin.math.abs(gap).toDouble()/axis.topNanos*92).toFloat().coerceIn(3f,92f)
+                        Box(Modifier.align(Alignment.TopCenter).offset(y=(if(gap>=0)93-h else 93f).dp).width(30.dp).height(h.dp).background(if(row.sessionId==selectedId)TelemetryWhite else ChartBlue,RoundedCornerShape(4.dp)))
                     }
+                    Text(date.format(DateTimeFormatter.ofPattern("MM-dd")),fontSize=11.sp,color=Muted,modifier=Modifier.padding(top=8.dp))
+                    if((ordinal[row.sessionId]?:1)>1)Text("第${ordinal[row.sessionId]}次",fontSize=10.sp,color=Muted)
                 }
-                repeat((5 - rows.size).coerceAtLeast(0)) { Spacer(Modifier.weight(1f)) }
-            }
+            };repeat((5-rows.size).coerceAtLeast(0)){Spacer(Modifier.weight(1f))} }
         }
     }
 }
-
-internal fun periodStatisticsLabel(start: LocalDate, monthly: Boolean): String =
-    if (monthly) start.format(DateTimeFormatter.ofPattern("yyyy年M月"))
-    else "${start.format(DateTimeFormatter.ofPattern("yyyy.MM.dd"))} – ${start.plusDays(6).format(DateTimeFormatter.ofPattern("MM.dd"))}"
-
-@Composable
-private fun ChartLabel(text: String, modifier: Modifier, color: Color, maximumSp: Float = 11f, alignment: Alignment = Alignment.Center) {
-    BoxWithConstraints(modifier, contentAlignment = alignment) {
-        val fontScale = LocalDensity.current.fontScale
-        // CJK glyphs take one em; latin/digits use a conservative .65 em estimate.
-        val ems = text.sumOf { if (it.code > 255) 1.0 else .65 }.toFloat()
-        val size = minOf(maximumSp, maxWidth.value / (ems * fontScale)).sp
-        Text(text, Modifier.fillMaxWidth(), fontSize = size,
-            lineHeight = if (alignment == Alignment.CenterEnd) size * 1.2f else androidx.compose.ui.unit.TextUnit.Unspecified,
-            color = color, maxLines = 1, textAlign = if (alignment == Alignment.CenterEnd) androidx.compose.ui.text.style.TextAlign.End else androidx.compose.ui.text.style.TextAlign.Center)
-    }
-}
+internal fun periodStatisticsLabel(start: LocalDate, monthly: Boolean): String = if (monthly) start.format(DateTimeFormatter.ofPattern("yyyy年M月")) else "${start.format(DateTimeFormatter.ofPattern("MM.dd"))} — ${start.plusDays(6).format(DateTimeFormatter.ofPattern("MM.dd"))}"

@@ -1,3 +1,4 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package app.deltat.commute.ui
 
 import androidx.compose.foundation.Canvas
@@ -11,6 +12,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -152,7 +155,7 @@ fun TelemetryRecordsScreen(
     val weekListState = androidx.compose.foundation.lazy.rememberLazyListState()
     Surface(Modifier.fillMaxSize(), color = Background, contentColor = TelemetryWhite) {
         Column(Modifier.fillMaxSize()) {
-            Text("个人纪录", fontSize = 27.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp))
+            TopAppBar(title = { Text("个人纪录") }, windowInsets = WindowInsets(0,0,0,0), colors = TopAppBarDefaults.topAppBarColors(containerColor = Background))
             LazyColumn(
                 modifier = Modifier.testTag("records-list"),
                 state = when (tab) { RecordsTab.LEADERBOARD -> rankingListState; RecordsTab.MONTH -> monthListState; RecordsTab.WEEK -> weekListState },
@@ -191,7 +194,7 @@ fun TelemetryRecordsScreen(
                     RecordsTab.MONTH, RecordsTab.WEEK -> item(key = "statistics-${tab.name}") {
                         key(selectedRouteId, tab) {
                             statisticsState.SaveableStateProvider("$selectedRouteId-${tab.name}") {
-                                PeriodStatisticsSection(allRows, monthly = tab == RecordsTab.MONTH, nowMillis = calendarNowMillis)
+                                PeriodStatisticsSection(allRows, monthly = tab == RecordsTab.MONTH, nowMillis = calendarNowMillis, onOpenSession = onOpenSession)
                             }
                         }
                     }
@@ -233,34 +236,12 @@ private fun androidx.compose.foundation.lazy.LazyListScope.leaderboardContent(
 }
 
 @Composable
-private fun PeriodButton(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier.height(50.dp).testTag("period-$label").semantics { this.selected = selected },
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (selected) Color(0xFF171B20) else Color.Transparent,
-            contentColor = if (selected) TelemetryWhite else Muted,
-            disabledContainerColor = Color(0xFF111318),
-            disabledContentColor = Muted.copy(alpha = .5f),
-        ),
-        border = ButtonDefaults.outlinedButtonBorder(enabled = true).copy(brush = androidx.compose.ui.graphics.SolidColor(if (selected) RacingRed else Color(0xFF3B4147))),
-        contentPadding = PaddingValues(horizontal = 2.dp),
-    ) { Text(label, maxLines = 1, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal) }
+private fun PeriodButton(label:String,selected:Boolean,modifier:Modifier,onClick:()->Unit) {
+    FilterChip(selected=selected,onClick=onClick,label={Text(label,maxLines=1)},modifier=modifier.testTag("period-$label"))
 }
-
 @Composable
-private fun RecordsHero(pb: Long?, theoreticalBest: Long?, count: Int) {
-    Card(colors = CardDefaults.cardColors(containerColor = Surface), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("筛选范围 PB", color = Purple, fontWeight = FontWeight.Bold)
-            Text(pb?.let(::formatRecordDuration) ?: "--", fontFamily = FontFamily.Monospace, fontSize = 44.sp, fontWeight = FontWeight.Black)
-            HorizontalDivider(color = Color(0xFF343A40))
-            Row {
-                RecordMetricInline("理论最佳", theoreticalBest?.let(::formatRecordDuration) ?: "--", Modifier.weight(1f))
-                RecordMetricInline("有效行程", count.toString(), Modifier.weight(1f))
-            }
-        }
-    }
+private fun RecordsHero(pb:Long?,theoreticalBest:Long?,count:Int) {
+    DesignPanel { Text("筛选范围 PB",color=Muted,style=MaterialTheme.typography.bodySmall);Text(pb?.let(::formatRecordDuration)?:"—",fontFamily=FontFamily.Monospace,fontSize=40.sp,fontWeight=FontWeight.SemiBold);Text("$count 次有效行程",color=Muted,style=MaterialTheme.typography.bodySmall);Text("理论最佳 ${theoreticalBest?.let(::formatRecordDuration)?:"—"}",color=Muted,style=MaterialTheme.typography.bodySmall) }
 }
 
 @Composable
@@ -272,36 +253,10 @@ private fun RecordMetricInline(label: String, value: String, modifier: Modifier)
 }
 
 @Composable
-private fun LeaderboardCard(position: Int, row: LeaderboardRow, gap: Long, badges: RecordBadges, onClick: () -> Unit) {
-    Card(
-        Modifier.fillMaxWidth().testTag("leaderboard-P$position").clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = Surface),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("P$position", color = TelemetryWhite, fontSize = if (position == 1) 28.sp else 23.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(62.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(formatRecordDuration(row.totalDurationNanos), fontFamily = FontFamily.Monospace, fontSize = if (position == 1) 25.sp else 21.sp, fontWeight = FontWeight.Bold)
-                    Text(if (position == 1) "GAP —" else "GAP +${formatRecordDuration(gap)}", color = Muted, fontSize = 12.sp)
-                }
-                Text("质量 ${row.qualityGrade}", color = Muted, fontSize = 12.sp)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (position == 1) RecordIdentityTag("PB", TelemetryWhite)
-                if (badges.monthlyBest) RecordIdentityTag("本月最快", Purple)
-                if (badges.weeklyBest) RecordIdentityTag("本周最快", Green)
-            }
-            HorizontalDivider(color = Color(0xFF343A40))
-            Row {
-                SectorValue("A→S1", row.sector1Nanos, row.missingCheckpointMask and (1 shl 1) != 0, Modifier.weight(1f))
-                SectorValue("S1→S2", row.sector2Nanos, row.missingCheckpointMask and ((1 shl 1) or (1 shl 2)) != 0, Modifier.weight(1f))
-                SectorValue("S2→B", row.sector3Nanos, row.missingCheckpointMask and (1 shl 2) != 0, Modifier.weight(1f))
-            }
-            Text(formatRecordDate(row.startedWallTimeMillis), color = Muted, fontSize = 12.sp)
-            if (row.missingCheckpointMask != 0) Text("总程有效 · 部分检查点缺失", color = Yellow, fontSize = 12.sp)
-        }
-    }
+private fun LeaderboardCard(position:Int,row:LeaderboardRow,gap:Long,badges:RecordBadges,onClick:()->Unit) {
+    ListItem(headlineContent={Text("P$position   ${formatRecordDuration(row.totalDurationNanos)}",fontFamily=FontFamily.Monospace)},
+        supportingContent={Column { Text("${formatRecordDate(row.startedWallTimeMillis)} · GAP ${if(gap==0L)"持平" else "+${formatRecordDuration(gap)}"}"); if(row.missingCheckpointMask!=0) Text("总程有效 · 部分检查点缺失",color=Yellow);FlowRow(horizontalArrangement=Arrangement.spacedBy(6.dp)){if(badges.monthlyBest)RecordIdentityTag("本月最快",Purple);if(badges.weeklyBest)RecordIdentityTag("本周最快",Green)} }},
+        leadingContent={Icon(Icons.Default.EmojiEvents,null,tint=Muted)},trailingContent={Icon(Icons.Default.ChevronRight,null)},colors=ListItemDefaults.colors(containerColor=Surface),modifier=Modifier.clip(RoundedCornerShape(8.dp)).testTag("leaderboard-P$position").clickable(onClick=onClick))
 }
 
 @Composable
@@ -326,67 +281,16 @@ private fun SectorValue(label: String, nanos: Long?, missing: Boolean, modifier:
 
 @Composable
 private fun RouteSelector(routes: List<RouteProfileEntity>, selectedRouteId: String?, onSelect: (String) -> Unit) {
-    val outer = RoundedCornerShape(28.dp)
-    if (routes.size <= 4) {
-        Row(Modifier.fillMaxWidth().height(52.dp).clip(outer).border(1.dp, Color(0xFF5D626A), outer)) {
-            routes.forEachIndexed { index, route ->
-                RouteOption(route, selectedRouteId == route.id, index > 0, Modifier.weight(1f)) { onSelect(route.id) }
-            }
-        }
-    } else {
-        Box(Modifier.fillMaxWidth().height(52.dp).clip(outer).border(1.dp, Color(0xFF5D626A), outer)) {
-            Row(Modifier.fillMaxHeight().horizontalScroll(rememberScrollState())) {
-                routes.forEachIndexed { index, route ->
-                    RouteOption(route, selectedRouteId == route.id, index > 0, Modifier.widthIn(min = 112.dp, max = 160.dp)) { onSelect(route.id) }
-                }
-            }
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().then(if (routes.size > 3) Modifier.horizontalScroll(rememberScrollState()) else Modifier)) {
+        routes.forEachIndexed { index, route ->
+            SegmentedButton(selected = selectedRouteId == route.id, onClick = { onSelect(route.id) }, shape = SegmentedButtonDefaults.itemShape(index, routes.size), modifier = Modifier.testTag("route-option-${route.id}").then(if(routes.size>3)Modifier.widthIn(min=112.dp) else Modifier.weight(1f))) { Text(route.name,maxLines=1,overflow=TextOverflow.Ellipsis) }
         }
     }
 }
-
-@Composable
-private fun RouteOption(route: RouteProfileEntity, selected: Boolean, divider: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    Row(
-        modifier.fillMaxHeight()
-            .background(if (selected) Color(0xFF5C171D) else Color(0xFF090B0E))
-            .then(if (divider) Modifier.border(width = 0.5.dp, color = Color(0xFF5D626A)) else Modifier)
-            .testTag("route-option-${route.id}").semantics { this.selected = selected }
-            .clickable(onClick = onClick).padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (selected) { Text("✓", color = Color.White, fontSize = 17.sp); Spacer(Modifier.width(8.dp)) }
-        Text(
-            route.name,
-            color = if (selected) Color.White else TelemetryWhite.copy(alpha = .85f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            fontSize = 16.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-        )
-    }
-}
-
 @Composable
 private fun RecordsTabs(selected: RecordsTab, onSelect: (RecordsTab) -> Unit) {
-    val outer = RoundedCornerShape(26.dp)
-    Row(Modifier.fillMaxWidth().height(54.dp).clip(outer).border(1.dp, Color(0xFF5D626A), outer).testTag("records-tabs")) {
-        RecordsTab.entries.forEachIndexed { index, tab ->
-            Box(
-                Modifier.weight(1f).fillMaxHeight().background(Color(0xFF111318))
-                    .then(if (index > 0) Modifier.border(width = 0.5.dp, color = Color(0xFF5D626A)) else Modifier)
-                    .testTag("records-tab-${tab.name}").semantics { this.selected = selected == tab }
-                    .clickable { onSelect(tab) },
-            ) {
-                Text(
-                    tab.title,
-                    color = if (selected == tab) Color.White else Muted,
-                    fontWeight = if (selected == tab) FontWeight.Bold else FontWeight.Normal,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                if (selected == tab) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth(.55f).height(2.dp).background(RacingRed))
-            }
-        }
+    PrimaryTabRow(selectedTabIndex=selected.ordinal,containerColor=Background,modifier=Modifier.testTag("records-tabs")) {
+        RecordsTab.entries.forEach { tab -> Tab(selected=selected==tab,onClick={onSelect(tab)},unselectedContentColor=Muted,text={Text(tab.title)},modifier=Modifier.testTag("records-tab-${tab.name}")) }
     }
 }
 

@@ -1,0 +1,11 @@
+{
+  "confirmedAt": "2026-10-23T00:24:45.279801+08:00",
+  "userAuthorization": "OK 可以开发了。记得计时相关的东西要有对应的颜色 参考f1相关规则 完事做好测试打包放到nas的路径里",
+  "design": "R2 revision 2",
+  "manifestSha256": "7c3e9fd4495c2e77a3896041ceb74f0eda29f2d1eb411724f188ff9251984607",
+  "planSha256": "6329e977eff8c428e4dd7e127d496389df90f9740d2682bc145991a0d334451a",
+  "scope": "R2 visual implementation + previously approved median/sort/detail, no multi-route expansion; preserve timing algorithms and schema",
+  "baseline": "dist/evidence/redesign-r2/evidence-index.json",
+  "beforeStatus": "?? app/src/androidTest/java/app/deltat/commute/R2BaselineCaptureTest.kt\n?? app/src/androidTest/java/app/deltat/commute/RealRedesignCaptureTest.kt\n?? app/src/androidTest/java/app/deltat/commute/RealRedesignData.kt\n?? app/src/androidTest/java/app/deltat/commute/RedesignBaselineCaptureTest.kt\n?? app/src/androidTest/java/app/deltat/commute/RedesignProposalTest.kt\n?? app/src/androidTest/java/app/deltat/commute/ReviewOnlineMap.kt\n?? assets/redesign-r1/\n?? assets/redesign-r2/\n?? dist/evidence/\n",
+  "head": "ba5cc6ee0648d56567e7f3e9e76d243d03e639f9"
+}
